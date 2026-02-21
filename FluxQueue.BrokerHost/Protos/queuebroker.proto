@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+option csharp_namespace = "FluxQueue.Broker";
+
+package fluxqueue;
+
+service QueueBroker {
+  rpc Send (SendRequest) returns (SendResponse);
+  rpc Receive (ReceiveRequest) returns (ReceiveResponse);
+  rpc Ack (AckRequest) returns (AckResponse);
+}
+
+message SendRequest {
+  string queue = 1;
+  bytes payload = 2;
+  int32 delaySeconds = 3;
+  int32 maxReceiveCount = 4;
+}
+
+message SendResponse {
+  string messageId = 1;
+}
+
+message ReceiveRequest {
+  string queue = 1;
+  int32 maxMessages = 2;
+  int32 visibilityTimeoutSeconds = 3;
+  int32 waitSeconds = 4;
+}
+
+message ReceivedMessage {
+  string messageId = 1;
+  bytes payload = 2;
+  string receiptHandle = 3;
+  int32 receiveCount = 4;
+}
+
+message ReceiveResponse {
+  repeated ReceivedMessage messages = 1;
+}
+
+message AckRequest {
+  string queue = 1;
+  string receiptHandle = 2;
+}
+
+message AckResponse {
+  bool acknowledged = 1;
+}

@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "FluxQueue.Console": {
+      "commandName": "Project"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker"
+    }
+  }
+}
