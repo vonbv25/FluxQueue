@@ -8,14 +8,19 @@ builder.Services.AddGrpc();
 
 // RocksDB path should be config-driven
 var dbPath = builder.Configuration["FluxQueue:DbPath"] ?? "./data/rocksdb";
-builder.Services.AddSingleton(_ => new QueueEngine(dbPath));
+builder.Services.AddSingleton(_ =>
+{
+    Directory.CreateDirectory(dbPath);
+    return new QueueEngine(dbPath);
+});
 
 // Background sweep: MVP needs it
 builder.Services.AddHostedService<QueueSweeper>();
+builder.Services.AddHealthChecks();
 
-builder.WebHost.ConfigureKestrel(o =>
+builder.WebHost.ConfigureKestrel((context, options) =>
 {
-    o.ListenAnyIP(5000, listen => listen.Protocols = HttpProtocols.Http1AndHttp2);
+    options.Configure(context.Configuration.GetSection("Kestrel"));
 });
 
 var app = builder.Build();
@@ -45,6 +50,8 @@ app.MapDelete("/queues/{queue}/receipts/{receiptHandle}", async (string queue, s
     var ok = await engine.AckAsync(queue, receiptHandle);
     return ok ? Results.NoContent() : Results.NotFound();
 });
+
+app.MapHealthChecks("/health");
 
 // ----- gRPC -----
 app.MapGrpcService<QueueBrokerGrpcService>();

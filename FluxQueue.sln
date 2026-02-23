@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FluxQueue.Core.Test", "Flux
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FluxQueue.BrokerHost", "FluxQueue.BrokerHost\FluxQueue.BrokerHost.csproj", "{2021D4B6-6D0F-46BD-8A29-1E2FEDA46428}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "TestApps", "TestApps", "{80589BC4-2BF9-4170-8B8C-73C22272BCBD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
