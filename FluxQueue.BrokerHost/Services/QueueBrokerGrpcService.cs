@@ -1,41 +1,42 @@
 ﻿using FluxQueue.Core;
 using Grpc.Core;
 using Google.Protobuf;
-using FluxQueue.Broker; // this should match option csharp_namespace in your proto
+using FluxQueue.Broker;
+using FluxQueue.Transport.Abstractions;
+using FluxQueue.Transport.Abstractions.Models; // this should match option csharp_namespace in your proto
 
 namespace FluxQueue.BrokerHost.Services;
-
 public sealed class QueueBrokerGrpcService : QueueBroker.QueueBrokerBase
 {
-    private readonly QueueEngine _engine;
+    private readonly IQueueOperations _ops;
 
-    public QueueBrokerGrpcService(QueueEngine engine) => _engine = engine;
+    public QueueBrokerGrpcService(IQueueOperations ops) => _ops = ops;
 
-    public override async Task<SendResponse> Send(SendRequest request, ServerCallContext context)
+    public override async Task<SendGrpcResponse> Send(SendGrpcRequest request, ServerCallContext context)
     {
-        var id = await _engine.SendAsync(
-            queue: request.Queue,
-            payload: request.Payload.ToByteArray(),
-            delaySeconds: request.DelaySeconds,
-            maxReceiveCount: request.MaxReceiveCount,
-            ct: context.CancellationToken);
+        var id = await _ops.SendAsync(new SendRequest(
+            Queue: request.Queue,
+            Payload: request.Payload.ToByteArray(),
+            DelaySeconds: request.DelaySeconds,
+            MaxReceiveCount: request.MaxReceiveCount
+        ), context.CancellationToken);
 
-        return new SendResponse { MessageId = id };
+        return new SendGrpcResponse { MessageId = id };
     }
 
-    public override async Task<ReceiveResponse> Receive(ReceiveRequest request, ServerCallContext context)
+    public override async Task<ReceiveGrpcResponse> Receive(ReceiveGrpcRequest request, ServerCallContext context)
     {
-        var msgs = await _engine.ReceiveAsync(
-            queue: request.Queue,
-            maxMessages: request.MaxMessages,
-            visibilityTimeoutSeconds: request.VisibilityTimeoutSeconds,
-            waitSeconds: request.WaitSeconds,
-            ct: context.CancellationToken);
+        var msgs = await _ops.ReceiveAsync(new ReceiveRequest(
+            Queue: request.Queue,
+            MaxMessages: request.MaxMessages,
+            VisibilityTimeoutSeconds: request.VisibilityTimeoutSeconds,
+            WaitSeconds: request.WaitSeconds
+        ), context.CancellationToken);
 
-        var resp = new ReceiveResponse();
+        var resp = new ReceiveGrpcResponse();
         foreach (var m in msgs)
         {
-            resp.Messages.Add(new ReceivedMessage
+            resp.Messages.Add(new ReceivedGrpcMessage
             {
                 MessageId = m.MessageId,
                 Payload = ByteString.CopyFrom(m.Payload),
@@ -43,16 +44,17 @@ public sealed class QueueBrokerGrpcService : QueueBroker.QueueBrokerBase
                 ReceiveCount = m.ReceiveCount
             });
         }
+
         return resp;
     }
 
-    public override async Task<AckResponse> Ack(AckRequest request, ServerCallContext context)
+    public override async Task<AckGrpcResponse> Ack(AckGrpcRequest request, ServerCallContext context)
     {
-        var ok = await _engine.AckAsync(
+        var ok = await _ops.AckAsync(
             queue: request.Queue,
             receiptHandle: request.ReceiptHandle,
             ct: context.CancellationToken);
 
-        return new AckResponse { Acknowledged = ok };
+        return new AckGrpcResponse { Acknowledged = ok };
     }
 }

@@ -30,6 +30,7 @@ public class QueueEngine : IDisposable
 
     private readonly string _nodeId;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _queueSignals = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _queueReceiveLocks = new();
 
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web);
 
@@ -215,7 +216,7 @@ public class QueueEngine : IDisposable
         using var it = _db.NewIterator(_cfInflight);
         it.Seek(prefix);
 
-        var toHandle = new List<(byte[] inflightKey, string msgId)>(Math.Min(maxToProcess, 1024));
+        var toHandle = new List<(byte[] inflightKey, string msgId, long untilMs)>(Math.Min(maxToProcess, 1024));
 
         // Collect first, then process (avoid iterator invalidation surprises)
         while (it.Valid() && processed + toHandle.Count < maxToProcess)
@@ -228,12 +229,12 @@ public class QueueEngine : IDisposable
             // Stop once inflightUntil > now
             if (CompareBytes(k, endKey) > 0) break;
 
-            var (msgId, _) = ParseInflightKey(queue, k);
-            toHandle.Add((k, msgId));
+            var (msgId, untilMs) = ParseInflightKey(queue, k);
+            toHandle.Add((k, msgId, untilMs));
             it.Next();
         }
 
-        foreach (var (inflightKeyBytes, msgId) in toHandle)
+        foreach (var (inflightKeyBytes, msgId, untilFromKey) in toHandle)
         {
             ct.ThrowIfCancellationRequested();
 
@@ -261,6 +262,28 @@ public class QueueEngine : IDisposable
                 continue;
             }
 
+            if (msg.State != MessageState.Inflight)
+            {
+                _db.Remove(inflightKeyBytes, _cfInflight); // optional cleanup
+                processed++;
+                continue;
+            }
+
+            if (msg.InflightUntilMs != untilFromKey)
+            {
+                // stale inflight index entry - delete it
+                _db.Remove(inflightKeyBytes, _cfInflight);
+                processed++;
+                continue;
+            }
+
+            if (msg.InflightUntilMs > nowMs)
+            {
+                processed++;
+                continue;
+            }
+
+
             // Redrive policy
             if (msg.ReceiveCount >= msg.MaxReceiveCount)
             {
@@ -270,6 +293,14 @@ public class QueueEngine : IDisposable
 
                 using var wb = new WriteBatch();
                 wb.Delete(inflightKeyBytes, _cfInflight);
+
+                if (!string.IsNullOrEmpty(msg.CurrentReceiptHandle))
+                {
+                    var rk = ReceiptKey(queue, msg.CurrentReceiptHandle);
+                    wb.Delete(rk, _cfReceipt);
+                    msg.CurrentReceiptHandle = null;
+                }
+
                 wb.Delete(msgKey, _cfMsg);
                 wb.Put(dlqKey, Serialize(new DeadLetterRecord
                 {
@@ -296,6 +327,14 @@ public class QueueEngine : IDisposable
 
                 using var wb = new WriteBatch();
                 wb.Delete(inflightKeyBytes, _cfInflight);
+
+                if (!string.IsNullOrEmpty(msg.CurrentReceiptHandle))
+                {
+                    var rk = ReceiptKey(queue, msg.CurrentReceiptHandle);
+                    wb.Delete(rk, _cfReceipt);
+                    msg.CurrentReceiptHandle = null;
+                }
+
                 wb.Put(msgKey, Serialize(msg), _cfMsg);
                 wb.Put(readyKey, Array.Empty<byte>(), _cfReady);
                 _db.Write(wb);
@@ -316,87 +355,96 @@ public class QueueEngine : IDisposable
     }
 
     // -------- Internal receive logic --------
-
     private bool TryReceiveBatch(string queue, int maxMessages, int visibilityTimeoutSeconds, List<ReceivedMessage> output)
     {
-        var nowMs = NowMs();
-        var prefix = ReadyPrefix(queue);
-
-        using var it = _db.NewIterator(_cfReady);
-        it.Seek(prefix);
-
-        int claimed = 0;
-        var toClaim = new List<(byte[] readyKey, long visibleAt, string msgId)>(maxMessages);
-
-        while (it.Valid() && claimed < maxMessages)
+        var rxLock = _queueReceiveLocks.GetOrAdd(queue, _ => new SemaphoreSlim(1, 1));
+        rxLock.Wait();
+        try
         {
-            var k = it.Key();
-            if (!StartsWith(k, prefix)) break;
+            var nowMs = NowMs();
+            var prefix = ReadyPrefix(queue);
 
-            var (msgId, visibleAt) = ParseReadyKey(queue, k);
-            if (visibleAt > nowMs) break; // earliest visible item is in the future
+            using var it = _db.NewIterator(_cfReady);
+            it.Seek(prefix);
 
-            toClaim.Add((k, visibleAt, msgId));
-            claimed++;
-            it.Next();
-        }
+            int claimed = 0;
+            var toClaim = new List<(byte[] readyKey, long visibleAt, string msgId)>(maxMessages);
 
-        if (toClaim.Count == 0) return false;
-
-        foreach (var (readyKeyBytes, _, msgId) in toClaim)
-        {
-            var msgKey = MsgKey(queue, msgId);
-            var msgVal = _db.Get(msgKey, _cfMsg);
-            if (msgVal is null)
+            while (it.Valid() && claimed < maxMessages)
             {
-                // orphan index
-                _db.Remove(readyKeyBytes, _cfReady);
-                continue;
+                var k = it.Key();
+                if (!StartsWith(k, prefix)) break;
+
+                var (msgId, visibleAt) = ParseReadyKey(queue, k);
+                if (visibleAt > nowMs) break;
+
+                toClaim.Add((k, visibleAt, msgId));
+                claimed++;
+                it.Next();
             }
 
-            var msg = Deserialize<MessageRecord>(msgVal);
-            if (msg is null)
+            if (toClaim.Count == 0) return false;
+
+            foreach (var (readyKeyBytes, _, msgId) in toClaim)
             {
-                _db.Remove(readyKeyBytes, _cfReady);
-                continue;
+                var msgKey = MsgKey(queue, msgId);
+                var msgVal = _db.Get(msgKey, _cfMsg);
+                if (msgVal is null)
+                {
+                    // orphan index
+                    _db.Remove(readyKeyBytes, _cfReady);
+                    continue;
+                }
+
+                var msg = Deserialize<MessageRecord>(msgVal);
+                if (msg is null)
+                {
+                    _db.Remove(readyKeyBytes, _cfReady);
+                    continue;
+                }
+
+                // Claim: Ready -> Inflight
+                var inflightUntil = nowMs + visibilityTimeoutSeconds * 1000L;
+                var receiptHandle = NewReceiptHandle();
+
+                msg.State = MessageState.Inflight;
+                msg.ReceiveCount += 1;
+                msg.InflightUntilMs = inflightUntil;
+                msg.UpdatedAtMs = nowMs;
+                msg.CurrentReceiptHandle = receiptHandle;
+
+                var inflightKey = InflightKey(queue, inflightUntil, msgId);
+                var receiptKey = ReceiptKey(queue, receiptHandle);
+
+                using var wb = new WriteBatch();
+                wb.Delete(readyKeyBytes, _cfReady);
+                wb.Put(msgKey, Serialize(msg), _cfMsg);
+                wb.Put(inflightKey, Array.Empty<byte>(), _cfInflight);
+                wb.Put(receiptKey, Serialize(new ReceiptRecord
+                {
+                    Queue = queue,
+                    ReceiptHandle = receiptHandle,
+                    MessageId = msgId,
+                    InflightUntilMs = inflightUntil,
+                    IssuedAtMs = nowMs
+                }), _cfReceipt);
+
+                _db.Write(wb);
+
+                output.Add(new ReceivedMessage(
+                    MessageId: msgId,
+                    Payload: Convert.FromBase64String(msg.PayloadBase64),
+                    ReceiptHandle: receiptHandle,
+                    ReceiveCount: msg.ReceiveCount
+                ));
             }
 
-            // Claim: Ready -> Inflight
-            var inflightUntil = nowMs + visibilityTimeoutSeconds * 1000L;
-            var receiptHandle = NewReceiptHandle();
-
-            msg.State = MessageState.Inflight;
-            msg.ReceiveCount += 1;
-            msg.InflightUntilMs = inflightUntil;
-            msg.UpdatedAtMs = nowMs;
-
-            var inflightKey = InflightKey(queue, inflightUntil, msgId);
-            var receiptKey = ReceiptKey(queue, receiptHandle);
-
-            using var wb = new WriteBatch();
-            wb.Delete(readyKeyBytes, _cfReady);
-            wb.Put(msgKey, Serialize(msg), _cfMsg);
-            wb.Put(inflightKey, Array.Empty<byte>(), _cfInflight);
-            wb.Put(receiptKey, Serialize(new ReceiptRecord
-            {
-                Queue = queue,
-                ReceiptHandle = receiptHandle,
-                MessageId = msgId,
-                InflightUntilMs = inflightUntil,
-                IssuedAtMs = nowMs
-            }), _cfReceipt);
-
-            _db.Write(wb);
-
-            output.Add(new ReceivedMessage(
-                MessageId: msgId,
-                Payload: Convert.FromBase64String(msg.PayloadBase64),
-                ReceiptHandle: receiptHandle,
-                ReceiveCount: msg.ReceiveCount
-            ));
+            return output.Count > 0;
         }
-
-        return output.Count > 0;
+        finally
+        {
+            rxLock.Release();
+        }
     }
 
     // -------- Key helpers (byte[] keys are faster than strings) --------
@@ -426,7 +474,6 @@ public class QueueEngine : IDisposable
     {
         // q:{queue}:r:{visibleAt}:{msgId}
         var s = Encoding.UTF8.GetString(key);
-        var parts = s.Split(':', 6);
         // ["q", queue, "r", visibleAt, msgId] but split count depends on queue text; safer:
         // We'll parse by finding the ":r:" marker.
         var marker = $":r:";
@@ -542,6 +589,7 @@ public class QueueEngine : IDisposable
         public MessageState State { get; set; }
         public long CreatedAtMs { get; set; }
         public long UpdatedAtMs { get; set; }
+        public string? CurrentReceiptHandle { get; set; }
     }
 
     private sealed class ReceiptRecord
