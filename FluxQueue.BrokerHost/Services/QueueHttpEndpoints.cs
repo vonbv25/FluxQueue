@@ -3,6 +3,8 @@ using FluxQueue.Transport.Abstractions.Models; // this should match option cshar
 
 namespace FluxQueue.BrokerHost.Services;
 
+record SendDto(string? PayloadBase64, int DelaySeconds = 0, int MaxReceiveCount = 5);
+record ReceiveDto(int MaxMessages = 1, int VisibilityTimeoutSeconds = 30, int WaitSeconds = 0);
 public static class QueueHttpEndpoints
 {
     public static IEndpointRouteBuilder MapQueueHttpEndpoints(this IEndpointRouteBuilder app)
