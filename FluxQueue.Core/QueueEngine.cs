@@ -377,6 +377,13 @@ public class QueueEngine : IDisposable
                 continue;
             }
 
+            if (msg.State != MessageState.Ready || msg.VisibleAtMs > nowMs)
+            {
+                // READY index is stale or message isn't visible yet -> clean it up
+                _db.Remove(readyKeyBytes, _cfReady);
+                continue;
+            }
+
             var inflightUntil = nowMs + visibilityTimeoutSeconds * 1000L;
             var receiptHandle = NewReceiptHandle();
 

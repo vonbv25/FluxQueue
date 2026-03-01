@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using NUnit.Framework;
 using RocksDbSharp;
 using FluxQueue.Core;
+using System.Buffers.Binary;
 
 namespace FluxQueue.Tests;
 
@@ -76,17 +77,15 @@ public class QueueEngineHardeningTests
         var cfReady = engine.GetPrivateField<ColumnFamilyHandle>("_cfReady");
 
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var staleReadyKey = Utf8($"q:{queue}:r:{nowMs:D13}:{msgId}");
+        var staleReadyKey = ReadyKey(queue, nowMs, msgId);
         db.Put(staleReadyKey, Array.Empty<byte>(), cfReady);
 
-        // Now receive again: if you added the guard
-        //   if (msg.State != Ready) { Remove(readyKey); continue; }
-        // it should NOT deliver it
+        // Should NOT deliver it because msg is inflight; stale ready index should be cleaned
         var second = await engine.ReceiveAsync(queue, maxMessages: 1, visibilityTimeoutSeconds: 30, waitSeconds: 0);
         Assert.That(second.Count, Is.EqualTo(0), "Should not deliver a message that is currently inflight.");
 
-        // Verify stale READY entry was cleaned up
-        Assert.That(CountKeysWithPrefix(db, cfReady, Utf8($"q:{queue}:r:")), Is.EqualTo(0),
+        // Verify stale READY entry was cleaned up (no ready keys at all in this queue right now)
+        Assert.That(CountKeysWithPrefix(db, cfReady, ReadyPrefixKey(queue)), Is.EqualTo(0),
             "Expected stale READY index entry to be removed.");
 
         // Cleanup: ack the original inflight lease
@@ -110,20 +109,18 @@ public class QueueEngineHardeningTests
         var db = engine.GetPrivateField<RocksDb>("_db");
         var cfInflight = engine.GetPrivateField<ColumnFamilyHandle>("_cfInflight");
 
-        // Inject a stale inflight key with an earlier "until" that does NOT match the message's actual lease
+        // Inject a stale inflight key with an earlier "until" that does NOT match message's actual lease
         var staleUntil = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 5_000; // already expired
-        var staleInflightKey = Utf8($"q:{queue}:i:{staleUntil:D13}:{msgId}");
+        var staleInflightKey = InflightKey(queue, staleUntil, msgId);
         db.Put(staleInflightKey, Array.Empty<byte>(), cfInflight);
 
-        // Now call sweep. With the lease-match check:
-        //   if (msg.InflightUntilMs != untilFromKey) { delete inflightKey; continue; }
-        // it should remove stale inflight key and NOT requeue/DLQ the message.
+        // Sweep should remove stale inflight key and NOT requeue/DLQ the message.
         var processed = await engine.SweepExpiredAsync(queue, maxToProcess: 1000);
         Assert.That(processed, Is.GreaterThanOrEqualTo(1));
 
         // Verify stale inflight key got removed
-        var prefix = Utf8($"q:{queue}:i:{staleUntil:D13}:{msgId}");
-        Assert.That(db.Get(prefix, cfInflight), Is.Empty, "Expected stale inflight key to be deleted.");
+        var stillThere = db.Get(staleInflightKey, cfInflight);
+        Assert.That(stillThere, Is.Null, "Expected stale inflight key to be deleted.");
 
         // The message should still be inflight (not receivable)
         var after = await engine.ReceiveAsync(queue, maxMessages: 1, visibilityTimeoutSeconds: 1, waitSeconds: 0);
@@ -146,15 +143,16 @@ public class QueueEngineHardeningTests
         var oldReceipt = r1[0].ReceiptHandle;
 
         // Let lease expire then sweep
-        await Task.Delay(1200);
+        await Task.Delay(1500);
         await engine.SweepExpiredAsync(queue, maxToProcess: 1000);
 
-        // Old receipt should NOT ack anymore (either because receipt was deleted or lease mismatch)
+        // Old receipt should NOT ack anymore
         var ackOld = await engine.AckAsync(queue, oldReceipt);
         Assert.That(ackOld, Is.False, "Old receipt must not ack after redrive.");
 
         // Message should be receivable again with a NEW receipt
-        var r2 = await engine.ReceiveAsync(queue, maxMessages: 1, visibilityTimeoutSeconds: 10, waitSeconds: 0);
+        // Long-poll to cover backoff (~2s) + jitter
+        var r2 = await engine.ReceiveAsync(queue, maxMessages: 1, visibilityTimeoutSeconds: 10, waitSeconds: 8);
         Assert.That(r2.Count, Is.EqualTo(1));
 
         Assert.That(r2[0].ReceiptHandle, Is.Not.EqualTo(oldReceipt), "Expected a new receipt after redrive.");
@@ -168,27 +166,93 @@ public class QueueEngineHardeningTests
 
     private static byte[] Utf8(string s) => Encoding.UTF8.GetBytes(s);
 
-    private static int CountKeysWithPrefix(RocksDb db, ColumnFamilyHandle cf, byte[] prefix)
-    {
-        int count = 0;
-        using var it = db.NewIterator(cf);
-        it.Seek(prefix);
-        while (it.Valid())
-        {
-            var k = it.Key();
-            if (!StartsWith(k, prefix)) break;
-            count++;
-            it.Next();
-        }
-        return count;
-    }
-
     private static bool StartsWith(byte[] data, byte[] prefix)
     {
         if (data.Length < prefix.Length) return false;
         for (int i = 0; i < prefix.Length; i++)
             if (data[i] != prefix[i]) return false;
         return true;
+    }
+
+    // Must match QueueEngine key encoding
+    private const byte KEYV = 1;
+
+    private static byte[] QueueBytes(string queue) => Encoding.UTF8.GetBytes(queue);
+
+    private static int WriteHeader(Span<byte> dst, byte type, ReadOnlySpan<byte> queueBytes)
+    {
+        dst[0] = KEYV;
+        dst[1] = type;
+        BinaryPrimitives.WriteUInt16BigEndian(dst.Slice(2, 2), (ushort)queueBytes.Length);
+        queueBytes.CopyTo(dst.Slice(4));
+        return 4 + queueBytes.Length;
+    }
+
+    private static void WriteInt64BE(Span<byte> dst, long value) =>
+        BinaryPrimitives.WriteInt64BigEndian(dst, value);
+
+    private static void WriteGuid(Span<byte> dst, Guid g)
+    {
+        Span<byte> tmp = stackalloc byte[16];
+        g.TryWriteBytes(tmp);
+        tmp.CopyTo(dst);
+    }
+
+    private static byte[] ReadyPrefixKey(string queue)
+    {
+        var qb = QueueBytes(queue);
+        var key = new byte[4 + qb.Length];
+        WriteHeader(key, (byte)'r', qb);
+        return key;
+    }
+
+    private static byte[] ReadyKey(string queue, long visibleAtMs, string msgId)
+    {
+        var qb = QueueBytes(queue);
+        var gid = Guid.ParseExact(msgId, "N");
+
+        var key = new byte[4 + qb.Length + 8 + 16];
+        var o = WriteHeader(key, (byte)'r', qb);
+        WriteInt64BE(key.AsSpan(o, 8), visibleAtMs); o += 8;
+        WriteGuid(key.AsSpan(o, 16), gid);
+        return key;
+    }
+
+    private static byte[] InflightKey(string queue, long inflightUntilMs, string msgId)
+    {
+        var qb = QueueBytes(queue);
+        var gid = Guid.ParseExact(msgId, "N");
+
+        var key = new byte[4 + qb.Length + 8 + 16];
+        var o = WriteHeader(key, (byte)'i', qb);
+        WriteInt64BE(key.AsSpan(o, 8), inflightUntilMs); o += 8;
+        WriteGuid(key.AsSpan(o, 16), gid);
+        return key;
+    }
+
+    private static int CountKeysWithPrefix(RocksDb db, ColumnFamilyHandle cf, byte[] prefix)
+    {
+        int count = 0;
+        using var it = db.NewIterator(cf);
+        it.Seek(prefix);
+
+        while (it.Valid())
+        {
+            var k = it.Key();
+            if (k.Length < prefix.Length) break;
+
+            bool match = true;
+            for (int i = 0; i < prefix.Length; i++)
+            {
+                if (k[i] != prefix[i]) { match = false; break; }
+            }
+
+            if (!match) break;
+            count++;
+            it.Next();
+        }
+
+        return count;
     }
 }
 
