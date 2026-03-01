@@ -3,7 +3,7 @@ using Grpc.Core;
 using Google.Protobuf;
 using FluxQueue.Broker;
 using FluxQueue.Transport.Abstractions;
-using FluxQueue.Transport.Abstractions.Models; // this should match option csharp_namespace in your proto
+using FluxQueue.Transport.Abstractions.Models;
 
 namespace FluxQueue.BrokerHost.Services;
 public sealed class QueueBrokerGrpcService : QueueBroker.QueueBrokerBase

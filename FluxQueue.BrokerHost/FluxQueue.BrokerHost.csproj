@@ -28,5 +28,8 @@
     <ProjectReference Include="..\FluxQueue.Transport.Abstractions\FluxQueue.Transport.Abstractions.csproj" />
     <ProjectReference Include="..\FluxQueue.Transport.Amqp\FluxQueue.Transport.Amqp.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Folder Include="data\" />
+  </ItemGroup>
 
 </Project>
