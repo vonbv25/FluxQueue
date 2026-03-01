@@ -7,8 +7,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="RockDb.Native" Version="6.12.1" />
-    <PackageReference Include="RocksDbSharp" Version="6.2.2" />
+    <ProjectReference Include="..\FluxQueue.Core\FluxQueue.Core.csproj" />
+    <ProjectReference Include="..\FluxQueue.Transport.Abstractions\FluxQueue.Transport.Abstractions.csproj" />
   </ItemGroup>
 
 </Project>
