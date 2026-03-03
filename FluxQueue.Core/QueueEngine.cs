@@ -31,7 +31,7 @@ public class QueueEngine : IDisposable
 
     private readonly string _nodeId;
     private readonly ConcurrentDictionary<string, QueueActor> _queueActors = new();
-
+    private readonly ConcurrentDictionary<string, long> _enqueueSeq = new();
     private readonly ConcurrentDictionary<string, byte> _knownQueues = new();
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web);
     public IReadOnlyCollection<string> KnownQueues => [.. _knownQueues.Keys];
@@ -82,6 +82,7 @@ public class QueueEngine : IDisposable
         var nowMs = NowMs();
         var visibleAtMs = nowMs + delaySeconds * 1000L;
         var msgId = Guid.NewGuid().ToString("N");
+        var seq = NextEnqueueSeq(queue);
 
         var record = new MessageRecord
         {
@@ -93,11 +94,13 @@ public class QueueEngine : IDisposable
             MaxReceiveCount = maxReceiveCount,
             State = MessageState.Ready,
             CreatedAtMs = nowMs,
-            UpdatedAtMs = nowMs
+            UpdatedAtMs = nowMs,
+            EnqueueSeq = seq
         };
 
         var msgKey = MsgKey(queue, msgId);
-        var readyKey = ReadyKey(queue, visibleAtMs, msgId);
+
+        var readyKey = ReadyKey(queue, visibleAtMs, seq, msgId);
 
         using var wb = new WriteBatch();
         wb.Put(msgKey, SerializeEnvelope(record, payload), _cfMsg);
@@ -294,8 +297,9 @@ public class QueueEngine : IDisposable
                 msg.VisibleAtMs = visibleAt;
                 msg.InflightUntilMs = 0;
                 msg.UpdatedAtMs = nowMs;
+                msg.EnqueueSeq = NextEnqueueSeq(queue);
 
-                var readyKey = ReadyKey(queue, visibleAt, msg.MessageId);
+                var readyKey = ReadyKey(queue, visibleAt, msg.EnqueueSeq, msg.MessageId);
 
                 using var wb = new WriteBatch();
                 wb.Delete(inflightKeyBytes, _cfInflight);
@@ -327,8 +331,11 @@ public class QueueEngine : IDisposable
     }
 
     // -------- Internal receive logic --------
-    private bool TryReceiveBatchNoLock(string queue, int maxMessages, int visibilityTimeoutSeconds, List<ReceivedMessage> output)
+    private (int delivered, int cleaned) TryReceiveBatchNoLock(string queue, int maxMessages, int visibilityTimeoutSeconds, List<ReceivedMessage> output)
     {
+        int delivered = 0;
+        int cleaned = 0;
+
         var scanNowMs = NowMs();
         var prefix = ReadyPrefix(queue);
 
@@ -350,7 +357,7 @@ public class QueueEngine : IDisposable
             it.Next();
         }
 
-        if (toClaim.Count == 0) return false;
+        if (toClaim.Count == 0) return (0, 0);
 
         foreach (var (readyKeyBytes, msgId) in toClaim)
         {
@@ -361,6 +368,7 @@ public class QueueEngine : IDisposable
             if (msgVal is null)
             {
                 _db.Remove(readyKeyBytes, _cfReady);
+                cleaned++;
                 continue;
             }
 
@@ -374,6 +382,7 @@ public class QueueEngine : IDisposable
             {
                 _db.Remove(readyKeyBytes, _cfReady);
                 _db.Remove(msgKey, _cfMsg);
+                cleaned++;
                 continue;
             }
 
@@ -381,6 +390,7 @@ public class QueueEngine : IDisposable
             {
                 // READY index is stale or message isn't visible yet -> clean it up
                 _db.Remove(readyKeyBytes, _cfReady);
+                cleaned++;
                 continue;
             }
 
@@ -418,9 +428,10 @@ public class QueueEngine : IDisposable
                 ReceiptHandle: receiptHandle,
                 ReceiveCount: msg.ReceiveCount
             ));
+            delivered++;
         }
 
-        return output.Count > 0;
+        return (delivered, cleaned);
     }
 
     // -------- Key helpers (byte[] keys are faster than strings) --------
@@ -461,15 +472,19 @@ public class QueueEngine : IDisposable
         return key;
     }
 
-    private static byte[] ReadyKey(string queue, long visibleAtMs, string msgId)
+    private static byte[] ReadyKey(string queue, long visibleAtMs, long enqueueSeq, string msgId)
     {
         var qb = QueueBytes(queue);
         var gid = Guid.ParseExact(msgId, "N");
 
-        var key = new byte[4 + qb.Length + 8 + 16];
+        // header + visibleAt(8) + seq(8) + guid(16)
+        var key = new byte[4 + qb.Length + 8 + 8 + 16];
         var o = WriteHeader(key, (byte)'r', qb);
+
         WriteInt64BE(key.AsSpan(o, 8), visibleAtMs); o += 8;
+        WriteInt64BE(key.AsSpan(o, 8), enqueueSeq); o += 8;
         WriteGuid(key.AsSpan(o, 16), gid);
+
         return key;
     }
 
@@ -525,6 +540,10 @@ public class QueueEngine : IDisposable
         int o = 4 + queueLen;
 
         long time = ReadInt64BE(key.AsSpan(o, 8)); o += 8;
+
+        // NEW: skip seq
+        o += 8;
+
         var gid = ReadGuid(key.AsSpan(o, 16));
         return (gid.ToString("N"), time);
     }
@@ -655,7 +674,6 @@ public class QueueEngine : IDisposable
         if (_queueActors.TryGetValue(queue, out var actor))
             actor.NotifyNewMessage();
     }
-
     private static void ValidateQueue(string queue)
     {
         if (string.IsNullOrWhiteSpace(queue)) throw new ArgumentNullException(nameof(queue));
@@ -665,7 +683,39 @@ public class QueueEngine : IDisposable
             if (!ok) throw new ArgumentException("Queue name contains invalid characters.", nameof(queue));
         }
     }
+    private long NextEnqueueSeq(string queue)
+    {
+        // First message => seq 1
+        return _enqueueSeq.AddOrUpdate(queue, 1, static (_, current) => checked(current + 1));
+    }
+    private long? TryGetNextReadyVisibleAtMs(string queue)
+    {
+        var prefix = ReadyPrefix(queue);
 
+        using var it = _db.NewIterator(_cfReady);
+        it.Seek(prefix);
+
+        // Scan a few keys to find the earliest FUTURE visibleAt.
+        // If the head keys are stale and <= now, they would cause 0ms waits.
+        var nowMs = NowMs();
+
+        for (int i = 0; i < 32; i++)
+        {
+            if (!it.Valid()) return null;
+
+            var k = it.Key();
+            if (!StartsWith(k, prefix)) return null;
+
+            var (_, visibleAt) = ParseReadyKey(queue, k);
+
+            if (visibleAt > nowMs)
+                return visibleAt;
+
+            it.Next();
+        }
+
+        return null;
+    }
     private void RegisterQueue(string queue) => _knownQueues.TryAdd(queue, 0);
     private byte[] Serialize<T>(T obj) => JsonSerializer.SerializeToUtf8Bytes(obj, _json);
     private T? Deserialize<T>(byte[] bytes) => JsonSerializer.Deserialize<T>(bytes, _json);
@@ -676,6 +726,7 @@ public class QueueEngine : IDisposable
     {
         public string Queue { get; set; } = "";
         public string MessageId { get; set; } = "";
+        public long EnqueueSeq { get; set; }
         public long VisibleAtMs { get; set; }
         public long InflightUntilMs { get; set; }
         public int ReceiveCount { get; set; }
@@ -757,6 +808,15 @@ public class QueueEngine : IDisposable
             var now = DateTimeOffset.UtcNow;
             var deadline = waitSeconds <= 0 ? now : now.AddSeconds(waitSeconds);
 
+            CancellationTokenRegistration ctr = default;
+            if (ct.CanBeCanceled)
+            {
+                ctr = ct.Register(() => tcs.TrySetCanceled(ct));
+            }
+
+            // Ensure we dispose registration when completed (avoid leaks)
+            _ = tcs.Task.ContinueWith(_ => ctr.Dispose(), TaskScheduler.Default);
+
             var req = new ReceiveRequest(maxMessages, visibilityTimeoutSeconds, deadline, ct, tcs);
             Touch();
             if (!_requests.Writer.TryWrite(req))
@@ -802,8 +862,39 @@ public class QueueEngine : IDisposable
 
                     var now = DateTimeOffset.UtcNow;
                     var earliestDeadline = GetEarliestDeadline();
-                    var delay = earliestDeadline <= now ? TimeSpan.Zero : (earliestDeadline - now);
 
+                    // If anything is already past its deadline, don't do a 0-delay wait.
+                    // Just loop so TryFulfillPending() can complete it.
+                    if (earliestDeadline <= now)
+                    {
+                        // Optional: Touch();  // not required
+                        continue;
+                    }
+
+                    var delay = earliestDeadline - now;
+
+                    // Also wake up when the next delayed message becomes visible
+                    var nextVisibleAtMs = _engine.TryGetNextReadyVisibleAtMs(_queue);
+                    if (nextVisibleAtMs is not null)
+                    {
+                        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                        var untilVisibleMs = nextVisibleAtMs.Value - nowMs;
+
+                        if (untilVisibleMs <= 0)
+                        {
+                            // Something claims to be visible now.
+                            // Don't do WaitAsync(0) — just loop and try fulfill again.
+                            // Add a tiny delay to avoid burning CPU if READY head is stale repeatedly.
+                            await Task.Delay(5, stopCt);
+                            continue;
+                        }
+
+                        var visibleDelay = TimeSpan.FromMilliseconds(untilVisibleMs);
+                        if (visibleDelay < delay)
+                            delay = visibleDelay;
+                    }
+
+                    // IMPORTANT: still wake on new requests or explicit signals
                     var waitRequestTask = _requests.Reader.WaitToReadAsync(stopCt).AsTask();
                     var waitSignalTask = _newMessageSignal.WaitAsync(delay, stopCt);
 
@@ -853,12 +944,21 @@ public class QueueEngine : IDisposable
                 var now = DateTimeOffset.UtcNow;
 
                 var results = new List<ReceivedMessage>(Math.Min(req.MaxMessages, 50));
-                var gotAny = _engine.TryReceiveBatchNoLock(_queue, req.MaxMessages, req.VisibilityTimeoutSeconds, results);
+                var (delivered, cleaned) = _engine.TryReceiveBatchNoLock(
+                    _queue, req.MaxMessages, req.VisibilityTimeoutSeconds, results);
 
-                if (gotAny)
+                if (delivered > 0)
                 {
                     req.Tcs.TrySetResult(results);
                     didAnything = true;
+                    continue;
+                }
+
+                // IMPORTANT: cleanup means DB changed, so loop again (don’t sleep)
+                if (cleaned > 0)
+                {
+                    didAnything = true;
+                    _pending.Enqueue(req);   // still waiting, but we made progress
                     continue;
                 }
 

@@ -54,6 +54,18 @@ public sealed class FluxQueueTestHost : IAsyncDisposable
             .Build();
     }
 
+    public async Task<int> SweepQueueAsync(string queue, int maxToProcess = 1000, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(queue))
+            throw new ArgumentNullException(nameof(queue));
+
+        // Resolve the same singleton QueueEngine used by AMQP transport
+        var engine = _host.Services.GetRequiredService<QueueEngine>();
+
+        // Run sweep once (your tests can call this deterministically)
+        return await engine.SweepExpiredAsync(queue, maxToProcess, ct);
+    }
+
     public async Task StartAsync() => await _host.StartAsync();
 
     public async Task StopAsync() => await _host.StopAsync();
