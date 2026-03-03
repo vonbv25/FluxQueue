@@ -536,12 +536,13 @@ public class QueueEngine : IDisposable
 
     private static (string msgId, long visibleAtMs) ParseReadyKey(string queue, byte[] key)
     {
+
         int queueLen = BinaryPrimitives.ReadUInt16BigEndian(key.AsSpan(2, 2));
         int o = 4 + queueLen;
 
         long time = ReadInt64BE(key.AsSpan(o, 8)); o += 8;
 
-        // NEW: skip seq
+        // skip seq
         o += 8;
 
         var gid = ReadGuid(key.AsSpan(o, 16));
@@ -954,14 +955,8 @@ public class QueueEngine : IDisposable
                     continue;
                 }
 
-                // IMPORTANT: cleanup means DB changed, so loop again (don’t sleep)
-                if (cleaned > 0)
-                {
-                    didAnything = true;
-                    _pending.Enqueue(req);   // still waiting, but we made progress
-                    continue;
-                }
-
+                // IMPORTANT: if caller is not waiting anymore, complete NOW
+                // even if we just cleaned stale READY keys.
                 if (now >= req.Deadline)
                 {
                     req.Tcs.TrySetResult([]);
@@ -969,6 +964,15 @@ public class QueueEngine : IDisposable
                     continue;
                 }
 
+                // If we cleaned something, we made progress: keep waiting, but loop again soon.
+                if (cleaned > 0)
+                {
+                    didAnything = true;
+                    _pending.Enqueue(req);
+                    continue;
+                }
+
+                // Still waiting
                 _pending.Enqueue(req);
             }
 

@@ -238,26 +238,52 @@ public sealed class AmqpIntegrationTests
     public async Task CompetingConsumers_Should_NotReceiveSameMessage()
     {
         var queue = "competeq";
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("x"));
 
-        // Start two concurrent receives (two independent links)
-        var t1 = AmqpClient.ReceiveOnceAsync("127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
-        var t2 = AmqpClient.ReceiveOnceAsync("127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
+        var addr = new Address("127.0.0.1", _host.AmqpPort, null, null, scheme: "amqp");
 
-        await Task.WhenAll(t1, t2);
+        // Consumer 1
+        var conn1 = await Connection.Factory.CreateAsync(addr);
+        var sess1 = new Session(conn1);
+        var rx1 = new ReceiverLink(sess1, "rx1-" + Guid.NewGuid().ToString("N"), queue);
+        rx1.SetCredit(1, autoRestore: false);
 
-        var (m1, rx1) = t1.Result;
-        var (m2, rx2) = t2.Result;
+        // Consumer 2
+        var conn2 = await Connection.Factory.CreateAsync(addr);
+        var sess2 = new Session(conn2);
+        var rx2 = new ReceiverLink(sess2, "rx2-" + Guid.NewGuid().ToString("N"), queue);
+        rx2.SetCredit(1, autoRestore: false);
 
-        var count = (m1 is null ? 0 : 1) + (m2 is null ? 0 : 1);
-        Assert.That(count, Is.EqualTo(1), "Expected exactly one consumer to receive the message.");
+        try
+        {
+            // Now send AFTER both consumers are attached and have credit
+            await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("x"));
 
-        // Cleanup receiver links
-        if (m1 != null) rx1.Accept(m1);
-        if (m2 != null) rx2.Accept(m2);
+            // Wait for delivery concurrently
+            var t1 = rx1.ReceiveAsync(TimeSpan.FromSeconds(5));
+            var t2 = rx2.ReceiveAsync(TimeSpan.FromSeconds(5));
 
-        await AmqpClient.CloseReceiverAsync(rx1);
-        await AmqpClient.CloseReceiverAsync(rx2);
+            await Task.WhenAll(t1, t2);
+
+            var m1 = t1.Result;
+            var m2 = t2.Result;
+
+            var count = (m1 is null ? 0 : 1) + (m2 is null ? 0 : 1);
+            Assert.That(count, Is.EqualTo(1), "Expected exactly one consumer to receive the message.");
+
+            // Cleanup
+            if (m1 != null) rx1.Accept(m1);
+            if (m2 != null) rx2.Accept(m2);
+        }
+        finally
+        {
+            try { await rx1.CloseAsync(); } catch { }
+            try { await sess1.CloseAsync(); } catch { }
+            try { await conn1.CloseAsync(); } catch { }
+
+            try { await rx2.CloseAsync(); } catch { }
+            try { await sess2.CloseAsync(); } catch { }
+            try { await conn2.CloseAsync(); } catch { }
+        }
     }
 
     [Test]

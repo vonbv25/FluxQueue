@@ -59,7 +59,7 @@ public class QueueEngineHardeningTests
     }
 
     [Test]
-    [Explicit("Currently having some issues.")]
+    //[Explicit("Currently having some issues.")]
     public async Task ReceiveAsync_should_ignore_and_cleanup_stale_ready_index_when_msg_not_ready()
     {
         using var engine = new QueueEngine(_dir);
@@ -78,8 +78,8 @@ public class QueueEngineHardeningTests
         var cfReady = engine.GetPrivateField<ColumnFamilyHandle>("_cfReady");
 
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var staleReadyKey = ReadyKey(queue, nowMs, msgId);
-        db.Put(staleReadyKey, Array.Empty<byte>(), cfReady);
+        var staleReadyKey = ReadyKey(queue, nowMs, enqueueSeq: 12345, msgId);
+        db.Put(staleReadyKey, [], cfReady);
 
         // Should NOT deliver it because msg is inflight; stale ready index should be cleaned
         var second = await engine.ReceiveAsync(queue, maxMessages: 1, visibilityTimeoutSeconds: 30, waitSeconds: 0);
@@ -728,15 +728,19 @@ public class QueueEngineHardeningTests
         return key;
     }
 
-    private static byte[] ReadyKey(string queue, long visibleAtMs, string msgId)
+    private static byte[] ReadyKey(string queue, long visibleAtMs, long enqueueSeq, string msgId)
     {
         var qb = QueueBytes(queue);
         var gid = Guid.ParseExact(msgId, "N");
 
-        var key = new byte[4 + qb.Length + 8 + 16];
+        // header + visibleAt(8) + seq(8) + guid(16)
+        var key = new byte[4 + qb.Length + 8 + 8 + 16];
         var o = WriteHeader(key, (byte)'r', qb);
+
         WriteInt64BE(key.AsSpan(o, 8), visibleAtMs); o += 8;
+        WriteInt64BE(key.AsSpan(o, 8), enqueueSeq); o += 8;
         WriteGuid(key.AsSpan(o, 16), gid);
+
         return key;
     }
 
