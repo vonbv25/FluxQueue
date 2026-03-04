@@ -98,9 +98,9 @@ public class QueueEngine : IDisposable
             EnqueueSeq = seq
         };
 
-        var msgKey = MsgKey(queue, msgId);
+        var msgKey = QueueEngineHelpers.MsgKey(queue, msgId);
 
-        var readyKey = ReadyKey(queue, visibleAtMs, seq, msgId);
+        var readyKey = QueueEngineHelpers.ReadyKey(queue, visibleAtMs, seq, msgId);
 
         using var wb = new WriteBatch();
         wb.Put(msgKey, SerializeEnvelope(record, payload), _cfMsg);
@@ -139,14 +139,14 @@ public class QueueEngine : IDisposable
 
         ct.ThrowIfCancellationRequested();
 
-        var receiptKey = ReceiptKey(queue, receiptHandle);
+        var receiptKey = QueueEngineHelpers.ReceiptKey(queue, receiptHandle);
         var receiptVal = _db.Get(receiptKey, _cfReceipt);
         if (receiptVal is null) return Task.FromResult(false);
 
         var receipt = Deserialize<ReceiptRecord>(receiptVal);
         if (receipt is null) return Task.FromResult(false);
 
-        var msgKey = MsgKey(queue, receipt.MessageId);
+        var msgKey = QueueEngineHelpers.MsgKey(queue, receipt.MessageId);
         var msgVal = _db.Get(msgKey, _cfMsg);
         if (msgVal is null)
         {
@@ -167,7 +167,7 @@ public class QueueEngine : IDisposable
         if (msg.State != MessageState.Inflight || msg.InflightUntilMs != receipt.InflightUntilMs)
             return Task.FromResult(false);
 
-        var inflightKey = InflightKey(queue, msg.InflightUntilMs, msg.MessageId);
+        var inflightKey = QueueEngineHelpers.InflightKey(queue, msg.InflightUntilMs, msg.MessageId);
 
         using var wb = new WriteBatch();
         wb.Delete(receiptKey, _cfReceipt);
@@ -190,8 +190,8 @@ public class QueueEngine : IDisposable
         ct.ThrowIfCancellationRequested();
 
         var nowMs = NowMs();
-        var prefix = InflightPrefix(queue);
-        var endKey = InflightKey(queue, nowMs, "ffffffffffffffffffffffffffffffff"); // inclusive upper bound within now
+        var prefix = QueueEngineHelpers.InflightPrefix(queue);
+        var endKey = QueueEngineHelpers.InflightKey(queue, nowMs, "ffffffffffffffffffffffffffffffff"); // inclusive upper bound within now
 
         int processed = 0;
 
@@ -205,11 +205,11 @@ public class QueueEngine : IDisposable
             ct.ThrowIfCancellationRequested();
 
             var k = it.Key();
-            if (!StartsWith(k, prefix)) break;
+            if (!QueueEngineHelpers.StartsWith(k, prefix)) break;
 
-            if (CompareBytes(k, endKey) > 0) break;
+            if (QueueEngineHelpers.CompareBytes(k, endKey) > 0) break;
 
-            var (msgId, untilMs) = ParseInflightKey(queue, k);
+            var (msgId, untilMs) = QueueEngineHelpers.ParseInflightKey(queue, k);
 
             // Defensive copy: iterator key buffer may be reused
             toHandle.Add(((byte[])k.Clone(), msgId, untilMs));
@@ -220,7 +220,7 @@ public class QueueEngine : IDisposable
         {
             ct.ThrowIfCancellationRequested();
 
-            var msgKey = MsgKey(queue, msgId);
+            var msgKey = QueueEngineHelpers.MsgKey(queue, msgId);
             var msgVal = _db.Get(msgKey, _cfMsg);
             if (msgVal is null)
             {
@@ -263,14 +263,14 @@ public class QueueEngine : IDisposable
             if (msg.ReceiveCount >= msg.MaxReceiveCount)
             {
                 var failedAtMs = nowMs;
-                var dlqKey = DlqKey(queue, failedAtMs, msg.MessageId);
+                var dlqKey = QueueEngineHelpers.DlqKey(queue, failedAtMs, msg.MessageId);
 
                 using var wb = new WriteBatch();
                 wb.Delete(inflightKeyBytes, _cfInflight);
 
                 if (!string.IsNullOrEmpty(msg.CurrentReceiptHandle))
                 {
-                    var rk = ReceiptKey(queue, msg.CurrentReceiptHandle);
+                    var rk = QueueEngineHelpers.ReceiptKey(queue, msg.CurrentReceiptHandle);
                     wb.Delete(rk, _cfReceipt);
                     msg.CurrentReceiptHandle = null;
                 }
@@ -299,14 +299,14 @@ public class QueueEngine : IDisposable
                 msg.UpdatedAtMs = nowMs;
                 msg.EnqueueSeq = NextEnqueueSeq(queue);
 
-                var readyKey = ReadyKey(queue, visibleAt, msg.EnqueueSeq, msg.MessageId);
+                var readyKey = QueueEngineHelpers.ReadyKey(queue, visibleAt, msg.EnqueueSeq, msg.MessageId);
 
                 using var wb = new WriteBatch();
                 wb.Delete(inflightKeyBytes, _cfInflight);
 
                 if (!string.IsNullOrEmpty(msg.CurrentReceiptHandle))
                 {
-                    var rk = ReceiptKey(queue, msg.CurrentReceiptHandle);
+                    var rk = QueueEngineHelpers.ReceiptKey(queue, msg.CurrentReceiptHandle);
                     wb.Delete(rk, _cfReceipt);
                     msg.CurrentReceiptHandle = null;
                 }
@@ -337,7 +337,7 @@ public class QueueEngine : IDisposable
         int cleaned = 0;
 
         var scanNowMs = NowMs();
-        var prefix = ReadyPrefix(queue);
+        var prefix = QueueEngineHelpers.ReadyPrefix(queue);
 
         using var it = _db.NewIterator(_cfReady);
         it.Seek(prefix);
@@ -347,9 +347,9 @@ public class QueueEngine : IDisposable
         while (it.Valid() && toClaim.Count < maxMessages)
         {
             var k = it.Key();
-            if (!StartsWith(k, prefix)) break;
+            if (!QueueEngineHelpers.StartsWith(k, prefix)) break;
 
-            var (msgId, visibleAt) = ParseReadyKey(queue, k);
+            var (msgId, visibleAt) = QueueEngineHelpers.ParseReadyKey(queue, k);
             if (visibleAt > scanNowMs) break;
 
             // defensive copy in case iterator buffer is reused
@@ -363,7 +363,7 @@ public class QueueEngine : IDisposable
         {
             var nowMs = NowMs();
 
-            var msgKey = MsgKey(queue, msgId);
+            var msgKey = QueueEngineHelpers.MsgKey(queue, msgId);
             var msgVal = _db.Get(msgKey, _cfMsg);
             if (msgVal is null)
             {
@@ -395,7 +395,7 @@ public class QueueEngine : IDisposable
             }
 
             var inflightUntil = nowMs + visibilityTimeoutSeconds * 1000L;
-            var receiptHandle = NewReceiptHandle();
+            var receiptHandle = QueueEngineHelpers.NewReceiptHandle();
 
             msg.State = MessageState.Inflight;
             msg.ReceiveCount += 1;
@@ -403,8 +403,8 @@ public class QueueEngine : IDisposable
             msg.UpdatedAtMs = nowMs;
             msg.CurrentReceiptHandle = receiptHandle;
 
-            var inflightKey = InflightKey(queue, inflightUntil, msgId);
-            var receiptKey = ReceiptKey(queue, receiptHandle);
+            var inflightKey = QueueEngineHelpers.InflightKey(queue, inflightUntil, msgId);
+            var receiptKey = QueueEngineHelpers.ReceiptKey(queue, receiptHandle);
 
             using var wb = new WriteBatch();
             wb.Delete(readyKeyBytes, _cfReady);
@@ -432,165 +432,6 @@ public class QueueEngine : IDisposable
         }
 
         return (delivered, cleaned);
-    }
-
-    // -------- Key helpers (byte[] keys are faster than strings) --------
-
-    private const byte KEYV = 1;
-
-    private static byte[] QueueBytes(string queue) => Encoding.UTF8.GetBytes(queue);
-
-    private static int WriteHeader(Span<byte> dst, byte type, ReadOnlySpan<byte> queueBytes)
-    {
-        dst[0] = KEYV;
-        dst[1] = type;
-        BinaryPrimitives.WriteUInt16BigEndian(dst.Slice(2, 2), (ushort)queueBytes.Length);
-        queueBytes.CopyTo(dst.Slice(4));
-        return 4 + queueBytes.Length;
-    }
-
-    private static void WriteInt64BE(Span<byte> dst, long value) =>
-        BinaryPrimitives.WriteInt64BigEndian(dst, value);
-
-    private static long ReadInt64BE(ReadOnlySpan<byte> src) =>
-        BinaryPrimitives.ReadInt64BigEndian(src);
-
-    private static void WriteGuid(Span<byte> dst, Guid g)
-    {
-        Span<byte> tmp = stackalloc byte[16];
-        g.TryWriteBytes(tmp);
-        tmp.CopyTo(dst);
-    }
-
-    private static Guid ReadGuid(ReadOnlySpan<byte> src) => new Guid(src.Slice(0, 16));
-
-    private static byte[] ReadyPrefix(string queue)
-    {
-        var qb = QueueBytes(queue);
-        var key = new byte[4 + qb.Length];
-        WriteHeader(key, (byte)'r', qb);
-        return key;
-    }
-
-    private static byte[] ReadyKey(string queue, long visibleAtMs, long enqueueSeq, string msgId)
-    {
-        var qb = QueueBytes(queue);
-        var gid = Guid.ParseExact(msgId, "N");
-
-        // header + visibleAt(8) + seq(8) + guid(16)
-        var key = new byte[4 + qb.Length + 8 + 8 + 16];
-        var o = WriteHeader(key, (byte)'r', qb);
-
-        WriteInt64BE(key.AsSpan(o, 8), visibleAtMs); o += 8;
-        WriteInt64BE(key.AsSpan(o, 8), enqueueSeq); o += 8;
-        WriteGuid(key.AsSpan(o, 16), gid);
-
-        return key;
-    }
-
-    private static byte[] InflightPrefix(string queue)
-    {
-        var qb = QueueBytes(queue);
-        var key = new byte[4 + qb.Length];
-        WriteHeader(key, (byte)'i', qb);
-        return key;
-    }
-
-    private static byte[] InflightKey(string queue, long inflightUntilMs, string msgId)
-    {
-        var qb = QueueBytes(queue);
-        var gid = Guid.ParseExact(msgId, "N");
-
-        var key = new byte[4 + qb.Length + 8 + 16];
-        var o = WriteHeader(key, (byte)'i', qb);
-        WriteInt64BE(key.AsSpan(o, 8), inflightUntilMs); o += 8;
-        WriteGuid(key.AsSpan(o, 16), gid);
-        return key;
-    }
-
-    private static byte[] DlqKey(string queue, long failedAtMs, string msgId)
-    {
-        var qb = QueueBytes(queue);
-        var gid = Guid.ParseExact(msgId, "N");
-
-        var key = new byte[4 + qb.Length + 8 + 16];
-        var o = WriteHeader(key, (byte)'d', qb);
-        WriteInt64BE(key.AsSpan(o, 8), failedAtMs); o += 8;
-        WriteGuid(key.AsSpan(o, 16), gid);
-        return key;
-    }
-
-    private static byte[] MsgKey(string queue, string msgId)
-    {
-        var qb = QueueBytes(queue);
-        var gid = Guid.ParseExact(msgId, "N");
-
-        var key = new byte[4 + qb.Length + 16];
-        var o = WriteHeader(key, (byte)'m', qb);
-        WriteGuid(key.AsSpan(o, 16), gid);
-        return key;
-    }
-
-    private static byte[] ReceiptKey(string queue, string receiptHandle) =>
-        Utf8($"q:{queue}:h:{receiptHandle}");
-
-    private static (string msgId, long visibleAtMs) ParseReadyKey(string queue, byte[] key)
-    {
-
-        int queueLen = BinaryPrimitives.ReadUInt16BigEndian(key.AsSpan(2, 2));
-        int o = 4 + queueLen;
-
-        long time = ReadInt64BE(key.AsSpan(o, 8)); o += 8;
-
-        // skip seq
-        o += 8;
-
-        var gid = ReadGuid(key.AsSpan(o, 16));
-        return (gid.ToString("N"), time);
-    }
-
-    private static (string msgId, long inflightUntilMs) ParseInflightKey(string queue, byte[] key)
-    {
-        int queueLen = BinaryPrimitives.ReadUInt16BigEndian(key.AsSpan(2, 2));
-        int o = 4 + queueLen;
-
-        long until = ReadInt64BE(key.AsSpan(o, 8)); o += 8;
-        var gid = ReadGuid(key.AsSpan(o, 16));
-        return (gid.ToString("N"), until);
-    }
-
-    private static byte[] Utf8(string s) => Encoding.UTF8.GetBytes(s);
-
-    private static bool StartsWith(byte[] data, byte[] prefix)
-    {
-        if (data.Length < prefix.Length) return false;
-        for (int i = 0; i < prefix.Length; i++)
-            if (data[i] != prefix[i]) return false;
-        return true;
-    }
-
-    private static int CompareBytes(byte[] a, byte[] b)
-    {
-        int len = Math.Min(a.Length, b.Length);
-        for (int i = 0; i < len; i++)
-        {
-            int d = a[i].CompareTo(b[i]);
-            if (d != 0) return d;
-        }
-        return a.Length.CompareTo(b.Length);
-    }
-
-    private static string NewReceiptHandle()
-    {
-        Span<byte> bytes = stackalloc byte[24];
-        RandomNumberGenerator.Fill(bytes);
-        return Base64Url(bytes);
-    }
-
-    private static string Base64Url(ReadOnlySpan<byte> data)
-    {
-        var s = Convert.ToBase64String(data);
-        return s.Replace('+', '-').Replace('/', '_').TrimEnd('=');
     }
 
     //--- Envelope ---//
@@ -691,7 +532,7 @@ public class QueueEngine : IDisposable
     }
     private long? TryGetNextReadyVisibleAtMs(string queue)
     {
-        var prefix = ReadyPrefix(queue);
+        var prefix = QueueEngineHelpers.ReadyPrefix(queue);
 
         using var it = _db.NewIterator(_cfReady);
         it.Seek(prefix);
@@ -705,9 +546,9 @@ public class QueueEngine : IDisposable
             if (!it.Valid()) return null;
 
             var k = it.Key();
-            if (!StartsWith(k, prefix)) return null;
+            if (!QueueEngineHelpers.StartsWith(k, prefix)) return null;
 
-            var (_, visibleAt) = ParseReadyKey(queue, k);
+            var (_, visibleAt) = QueueEngineHelpers.ParseReadyKey(queue, k);
 
             if (visibleAt > nowMs)
                 return visibleAt;
