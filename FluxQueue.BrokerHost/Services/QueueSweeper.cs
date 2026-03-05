@@ -2,94 +2,61 @@
 using Microsoft.Extensions.Options;
 
 namespace FluxQueue.BrokerHost.Services;
-
 public sealed class QueueSweeper : BackgroundService
 {
     private readonly QueueEngine _engine;
-    private readonly QueueSweeperOptions _opt;
+    private readonly IOptions<QueueSweeperOptions> _opt;
     private readonly ILogger<QueueSweeper> _log;
 
-    // Simple per-queue backoff when sweep errors occur (avoid log spam)
-    private readonly Dictionary<string, DateTimeOffset> _skipUntil = [];
-
-    public QueueSweeper(
-        QueueEngine engine,
-        IOptions<QueueSweeperOptions> options,
-        ILogger<QueueSweeper> log)
+    public QueueSweeper(QueueEngine engine, IOptions<QueueSweeperOptions> opt, ILogger<QueueSweeper> log)
     {
         _engine = engine;
-        _opt = options.Value;
+        _opt = opt;
         _log = log;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _log.LogInformation("QueueSweeper started. SweepInterval={SweepInterval} IdleInterval={IdleInterval} MaxToProcessPerQueue={Max}",
-            _opt.SweepInterval, _opt.IdleInterval, _opt.MaxToProcessPerQueue);
+        if (!_opt.Value.Enabled) return;
 
         while (!stoppingToken.IsCancellationRequested)
         {
             var queues = _engine.KnownQueues;
-
             if (queues.Count == 0)
             {
-                await Task.Delay(_opt.IdleInterval, stoppingToken);
+                await Task.Delay(_opt.Value.IdleDelayMs, stoppingToken);
                 continue;
             }
 
-            var now = DateTimeOffset.UtcNow;
-            int totalProcessed = 0;
+            int anyProcessed = 0;
+            int swept = 0;
 
             foreach (var q in queues)
             {
-                stoppingToken.ThrowIfCancellationRequested();
-
-                // If a queue has been erroring, skip it briefly
-                if (_skipUntil.TryGetValue(q, out var until) && until > now)
-                    continue;
+                if (swept++ >= _opt.Value.MaxQueuesPerTick) break;
 
                 try
                 {
-                    var processed = await _engine.SweepExpiredAsync(
-                        queue: q,
-                        maxToProcess: _opt.MaxToProcessPerQueue,
-                        ct: stoppingToken);
-
-                    totalProcessed += processed;
-
-                    // Success: clear backoff
-                    _skipUntil.Remove(q);
+                    var p = await _engine.SweepExpiredAsync(q, _opt.Value.BatchSize, stoppingToken);
+                    anyProcessed += p;
                 }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
+                catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
-                    // Back off this queue for a bit to avoid tight failure loops
-                    var backoff = TimeSpan.FromSeconds(5);
-                    _skipUntil[q] = now.Add(backoff);
-
-                    _log.LogWarning(ex, "Sweep failed for queue {Queue}. Backing off for {BackoffSeconds}s", q, backoff.TotalSeconds);
+                    _log.LogWarning(ex, "Sweeper failed for queue {Queue}", q);
                 }
             }
 
-            // If we did actual work, loop soon (keeps redelivery snappy).
-            // If we did no work, pause (reduces CPU churn).
-            var delay = totalProcessed > 0 ? _opt.SweepInterval : _opt.IdleInterval;
-            await Task.Delay(delay, stoppingToken);
+            await Task.Delay(anyProcessed > 0 ? _opt.Value.BusyDelayMs : _opt.Value.IdleDelayMs, stoppingToken);
         }
     }
 }
 
 public sealed class QueueSweeperOptions
 {
-    /// <summary>How often to run a full sweep cycle.</summary>
-    public TimeSpan SweepInterval { get; set; } = TimeSpan.FromSeconds(1);
-
-    /// <summary>When there are no known queues, wait this long before checking again.</summary>
-    public TimeSpan IdleInterval { get; set; } = TimeSpan.FromSeconds(2);
-
-    /// <summary>Max inflight entries to process per queue per sweep cycle.</summary>
-    public int MaxToProcessPerQueue { get; set; } = 1000;
+    public bool Enabled { get; set; } = true;
+    public int BatchSize { get; set; } = 2000;
+    public int MaxQueuesPerTick { get; set; } = 50;
+    public int IdleDelayMs { get; set; } = 250;
+    public int BusyDelayMs { get; set; } = 10;
 }

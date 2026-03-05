@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using NUnit.Framework;
@@ -779,15 +778,5 @@ public class QueueEngineHardeningTests
         }
 
         return count;
-    }
-}
-
-internal static class ReflectionExtensions
-{
-    public static T GetPrivateField<T>(this object obj, string fieldName)
-    {
-        var f = obj.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
-        if (f is null) throw new InvalidOperationException($"Field not found: {fieldName}");
-        return (T)f.GetValue(obj)!;
     }
 }
