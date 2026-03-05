@@ -18,6 +18,8 @@ builder.Services.AddSingleton(_ =>
 });
 
 // Background sweep: MVP needs it
+builder.Services.Configure<QueueReconcilerOptions>(builder.Configuration.GetSection("FluxQueue:Reconciler"));
+builder.Services.AddHostedService<QueueReconcilerHostedService>();
 builder.Services.Configure<QueueSweeperOptions>(builder.Configuration.GetSection("FluxQueue:Sweeper"));
 builder.Services.AddHostedService<QueueSweeper>();
 builder.Services.AddHealthChecks();

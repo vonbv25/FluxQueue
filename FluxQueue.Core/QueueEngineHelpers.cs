@@ -160,4 +160,17 @@ public static class QueueEngineHelpers
 
     public static void WriteInt64BE(Span<byte> dst, long value) =>
         BinaryPrimitives.WriteInt64BigEndian(dst, value);
+
+    public static long ComputeBackoffMs(int receiveCount)
+    {
+        var exp = Math.Min(6, Math.Max(0, receiveCount));
+        var baseMs = (long)(1000 * Math.Pow(2, exp));
+        baseMs = Math.Min(baseMs, 60_000);
+
+        Span<byte> b = stackalloc byte[2];
+        RandomNumberGenerator.Fill(b);
+        var jitter = BinaryPrimitives.ReadUInt16LittleEndian(b) % 500;
+
+        return baseMs + jitter;
+    }
 }

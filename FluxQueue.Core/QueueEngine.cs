@@ -12,7 +12,12 @@ using RocksDbSharp;
 using static RocksDbSharp.ColumnFamilies;
 
 namespace FluxQueue.Core;
-
+public sealed class ReconcileOptions
+{
+    public bool WipeAndRebuildIndexes { get; set; } = true;
+    public int MaxMessages { get; set; } = 5_000_000;
+    public int SweepBatchSize { get; set; } = 20_000;
+}
 public class QueueEngine : IDisposable
 {
     // Column families
@@ -244,7 +249,12 @@ public class QueueEngine : IDisposable
             // Only process truly expired + consistent inflight records
             if (msg.State != MessageState.Inflight) { _db.Remove(inflightKeyBytes, _cfInflight); processed++; continue; }
             if (msg.InflightUntilMs != untilFromKey) { _db.Remove(inflightKeyBytes, _cfInflight); processed++; continue; }
-            if (msg.InflightUntilMs > nowMs) { processed++; continue; }
+            if (msg.InflightUntilMs > nowMs)
+            {
+                _db.Remove(inflightKeyBytes, _cfInflight);
+                processed++;
+                continue;
+            }
 
             // We need payload only if we will requeue or DLQ.
             ReadOnlyMemory<byte> payloadMem;
@@ -290,7 +300,7 @@ public class QueueEngine : IDisposable
             }
             else
             {
-                var delayMs = ComputeBackoffMs(msg.ReceiveCount);
+                var delayMs = QueueEngineHelpers.ComputeBackoffMs(msg.ReceiveCount);
                 var visibleAt = nowMs + delayMs;
 
                 msg.State = MessageState.Ready;
@@ -498,19 +508,6 @@ public class QueueEngine : IDisposable
 
     private static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    private static long ComputeBackoffMs(int receiveCount)
-    {
-        var exp = Math.Min(6, Math.Max(0, receiveCount));
-        var baseMs = (long)(1000 * Math.Pow(2, exp));
-        baseMs = Math.Min(baseMs, 60_000);
-
-        Span<byte> b = stackalloc byte[2];
-        RandomNumberGenerator.Fill(b);
-        var jitter = BinaryPrimitives.ReadUInt16LittleEndian(b) % 500;
-
-        return baseMs + jitter;
-    }
-
     private void Signal(string queue)
     {
         if (_queueActors.TryGetValue(queue, out var actor))
@@ -605,6 +602,133 @@ public class QueueEngine : IDisposable
         {
             actor.Dispose();
         }
+    }
+
+    public async Task ReconcileAsync(ReconcileOptions opt, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        if (opt.WipeAndRebuildIndexes)
+        {
+            WipeColumnFamily(_cfReady, ct);
+            WipeColumnFamily(_cfInflight, ct);
+            WipeColumnFamily(_cfReceipt, ct);
+        }
+
+        // First pass: rebuild indexes from msg CF
+        var nowMs = NowMs();
+        int scanned = 0;
+
+        using var it = _db.NewIterator(_cfMsg);
+        it.SeekToFirst();
+
+        using var wb = new WriteBatch();
+
+        while (it.Valid() && scanned < opt.MaxMessages)
+        {
+            ct.ThrowIfCancellationRequested();
+            scanned++;
+
+            var msgKey = it.Key();     // byte[]
+            var msgVal = it.Value();   // byte[]
+
+            MessageRecord meta;
+            try
+            {
+                meta = DeserializeEnvelopeMeta<MessageRecord>(msgVal);
+            }
+            catch
+            {
+                // Corrupt -> drop it (or keep, depending on your philosophy)
+                wb.Delete(msgKey, _cfMsg);
+                if (scanned % 10_000 == 0) { _db.Write(wb); wb.Clear(); }
+                it.Next();
+                continue;
+            }
+
+            // Make sure KnownQueues includes it
+            if (!string.IsNullOrWhiteSpace(meta.Queue))
+                RegisterQueue(meta.Queue);
+
+            if (meta.State == MessageState.Ready)
+            {
+                // Recreate READY index
+                var rk = QueueEngineHelpers.ReadyKey(meta.Queue, meta.VisibleAtMs, meta.EnqueueSeq, meta.MessageId);
+                wb.Put(rk, Array.Empty<byte>(), _cfReady);
+            }
+            else if (meta.State == MessageState.Inflight)
+            {
+                // IMPORTANT: always rebuild inflight index, even if already expired.
+                // SweepExpiredAsync discovers expired inflight ONLY by scanning cfInflight.
+                var ik = QueueEngineHelpers.InflightKey(meta.Queue, meta.InflightUntilMs, meta.MessageId);
+                wb.Put(ik, Array.Empty<byte>(), _cfInflight);
+
+                if (!string.IsNullOrEmpty(meta.CurrentReceiptHandle))
+                {
+                    var receiptKey = QueueEngineHelpers.ReceiptKey(meta.Queue, meta.CurrentReceiptHandle);
+                    wb.Put(receiptKey, Serialize(new ReceiptRecord
+                    {
+                        Queue = meta.Queue,
+                        ReceiptHandle = meta.CurrentReceiptHandle,
+                        MessageId = meta.MessageId,
+                        InflightUntilMs = meta.InflightUntilMs,
+                        IssuedAtMs = meta.UpdatedAtMs
+                    }), _cfReceipt);
+                }
+            }
+
+            if (scanned % 10_000 == 0)
+            {
+                _db.Write(wb);
+                wb.Clear();
+            }
+
+            it.Next();
+        }
+
+        if (wb.Count() > 0)
+            _db.Write(wb);
+
+        // Second pass: run a sweep for all known queues to expire already-expired inflight
+        // This ensures expired inflight gets requeued/DLQ’d on startup.
+        foreach (var q in KnownQueues)
+        {
+            ct.ThrowIfCancellationRequested();
+            // sweep may need multiple loops if there are tons of inflight
+            for (int i = 0; i < 100; i++)
+            {
+                var processed = await SweepExpiredAsync(q, opt.SweepBatchSize, ct);
+                if (processed == 0) break;
+            }
+        }
+    }
+
+    private void WipeColumnFamily(ColumnFamilyHandle cf, CancellationToken ct)
+    {
+        using var it = _db.NewIterator(cf);
+        it.SeekToFirst();
+
+        var wb = new WriteBatch();
+        int n = 0;
+
+        while (it.Valid())
+        {
+            ct.ThrowIfCancellationRequested();
+
+            wb.Delete(it.Key(), cf);
+            n++;
+
+            if (n % 50_000 == 0)
+            {
+                _db.Write(wb);
+                wb.Clear();
+            }
+
+            it.Next();
+        }
+
+        if (n % 50_000 != 0)
+            _db.Write(wb);
     }
 
     private sealed class QueueActor : IDisposable
