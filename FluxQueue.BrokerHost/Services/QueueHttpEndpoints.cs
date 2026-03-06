@@ -16,7 +16,6 @@ public sealed record ReceiveDto(
     int? MaxMessages = null,
     int? VisibilityTimeoutSeconds = null,
     int? WaitSeconds = null);
-
 public static class QueueHttpEndpoints
 {
     public static IEndpointRouteBuilder MapQueueHttpEndpoints(this IEndpointRouteBuilder app)
