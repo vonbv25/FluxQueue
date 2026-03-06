@@ -1,0 +1,25 @@
+﻿services:
+  fluxqueue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fluxqueue
+    ports:
+      - "8080:8080"
+      - "5672:5672"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      FluxQueue__DbPath: /data/rocksdb
+    volumes:
+      - fluxqueue-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  fluxqueue-data:

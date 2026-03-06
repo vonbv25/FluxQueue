@@ -1,4 +1,5 @@
-﻿using FluxQueue.Core;
+﻿using FluxQueue.BrokerHost.Configuration;
+using FluxQueue.Core;
 using Microsoft.Extensions.Options;
 
 namespace FluxQueue.BrokerHost.Services;
@@ -80,16 +81,4 @@ public sealed class QueueSweeper : BackgroundService
             await Task.Delay(delay, stoppingToken);
         }
     }
-}
-
-public sealed class QueueSweeperOptions
-{
-    /// <summary>How often to run a full sweep cycle.</summary>
-    public TimeSpan SweepInterval { get; set; } = TimeSpan.FromSeconds(1);
-
-    /// <summary>When there are no known queues, wait this long before checking again.</summary>
-    public TimeSpan IdleInterval { get; set; } = TimeSpan.FromSeconds(2);
-
-    /// <summary>Max inflight entries to process per queue per sweep cycle.</summary>
-    public int MaxToProcessPerQueue { get; set; } = 1000;
 }
