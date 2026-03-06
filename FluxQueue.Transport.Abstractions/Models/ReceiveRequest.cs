@@ -2,7 +2,7 @@
 
 public sealed record ReceiveRequest(
     string Queue,
-    int MaxMessages = 1,
-    int VisibilityTimeoutSeconds = 60,
-    int WaitSeconds = 0
+    int? MaxMessages = null,
+    int? VisibilityTimeoutSeconds = null,
+    int? WaitSeconds = null
 );

@@ -1,17 +1,8 @@
-﻿using FluxQueue.Core;
+﻿using FluxQueue.BrokerHost.Configuration;
+using FluxQueue.Core;
 using Microsoft.Extensions.Options;
 
 namespace FluxQueue.BrokerHost.Services;
-public sealed class QueueReconcilerOptions
-{
-    public bool Enabled { get; set; } = true;
-
-    // safest “option 2” that you chose: wipe old index CFs and rebuild from CF_MSG
-    public bool WipeAndRebuildIndexes { get; set; } = true;
-
-    public int MaxMessagesPerRun { get; set; } = 5_000_000; // safety cap
-    public int SweepBatchSize { get; set; } = 20_000;       // when expiring inflight during reconcile
-}
 public sealed class QueueReconcilerHostedService : IHostedService
 {
     private readonly QueueEngine _engine;
@@ -38,7 +29,7 @@ public sealed class QueueReconcilerHostedService : IHostedService
         await _engine.ReconcileAsync(new ReconcileOptions
         {
             WipeAndRebuildIndexes = _opt.Value.WipeAndRebuildIndexes,
-            MaxMessages = _opt.Value.MaxMessagesPerRun,
+            MaxMessages = _opt.Value.MaxMessages,
             SweepBatchSize = _opt.Value.SweepBatchSize
         }, ct);
 

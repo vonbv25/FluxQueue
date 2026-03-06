@@ -1,62 +1,84 @@
-﻿using FluxQueue.Core;
+﻿using FluxQueue.BrokerHost.Configuration;
+using FluxQueue.Core;
 using Microsoft.Extensions.Options;
 
 namespace FluxQueue.BrokerHost.Services;
+
 public sealed class QueueSweeper : BackgroundService
 {
     private readonly QueueEngine _engine;
-    private readonly IOptions<QueueSweeperOptions> _opt;
+    private readonly QueueSweeperOptions _opt;
     private readonly ILogger<QueueSweeper> _log;
 
-    public QueueSweeper(QueueEngine engine, IOptions<QueueSweeperOptions> opt, ILogger<QueueSweeper> log)
+    // Simple per-queue backoff when sweep errors occur (avoid log spam)
+    private readonly Dictionary<string, DateTimeOffset> _skipUntil = [];
+
+    public QueueSweeper(
+        QueueEngine engine,
+        IOptions<QueueSweeperOptions> options,
+        ILogger<QueueSweeper> log)
     {
         _engine = engine;
-        _opt = opt;
+        _opt = options.Value;
         _log = log;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!_opt.Value.Enabled) return;
+        _log.LogInformation("QueueSweeper started. SweepInterval={SweepInterval} IdleInterval={IdleInterval} MaxToProcessPerQueue={Max}",
+            _opt.BusyDelayMs, _opt.IdleDelayMs, _opt.MaxQueuesPerTick);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             var queues = _engine.KnownQueues;
+
             if (queues.Count == 0)
             {
-                await Task.Delay(_opt.Value.IdleDelayMs, stoppingToken);
+                await Task.Delay(_opt.IdleDelayMs, stoppingToken);
                 continue;
             }
 
-            int anyProcessed = 0;
-            int swept = 0;
+            var now = DateTimeOffset.UtcNow;
+            int totalProcessed = 0;
 
             foreach (var q in queues)
             {
-                if (swept++ >= _opt.Value.MaxQueuesPerTick) break;
+                stoppingToken.ThrowIfCancellationRequested();
+
+                // If a queue has been erroring, skip it briefly
+                if (_skipUntil.TryGetValue(q, out var until) && until > now)
+                    continue;
 
                 try
                 {
-                    var p = await _engine.SweepExpiredAsync(q, _opt.Value.BatchSize, stoppingToken);
-                    anyProcessed += p;
+                    var processed = await _engine.SweepExpiredAsync(
+                        queue: q,
+                        maxToProcess: _opt.MaxQueuesPerTick,
+                        ct: stoppingToken);
+
+                    totalProcessed += processed;
+
+                    // Success: clear backoff
+                    _skipUntil.Remove(q);
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
-                    _log.LogWarning(ex, "Sweeper failed for queue {Queue}", q);
+                    // Back off this queue for a bit to avoid tight failure loops
+                    var backoff = TimeSpan.FromSeconds(5);
+                    _skipUntil[q] = now.Add(backoff);
+
+                    _log.LogWarning(ex, "Sweep failed for queue {Queue}. Backing off for {BackoffSeconds}s", q, backoff.TotalSeconds);
                 }
             }
 
-            await Task.Delay(anyProcessed > 0 ? _opt.Value.BusyDelayMs : _opt.Value.IdleDelayMs, stoppingToken);
+            // If we did actual work, loop soon (keeps redelivery snappy).
+            // If we did no work, pause (reduces CPU churn).
+            var delay = totalProcessed > 0 ? _opt.BusyDelayMs : _opt.IdleDelayMs;
+            await Task.Delay(delay, stoppingToken);
         }
     }
-}
-
-public sealed class QueueSweeperOptions
-{
-    public bool Enabled { get; set; } = true;
-    public int BatchSize { get; set; } = 2000;
-    public int MaxQueuesPerTick { get; set; } = 50;
-    public int IdleDelayMs { get; set; } = 250;
-    public int BusyDelayMs { get; set; } = 10;
 }

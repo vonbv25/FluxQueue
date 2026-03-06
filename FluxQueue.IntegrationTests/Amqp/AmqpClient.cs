@@ -19,10 +19,6 @@ public static class AmqpClient
             Properties = new Properties { MessageId = Guid.NewGuid().ToString("N") }
         };
 
-        // If your AMQP adapter supports delay, it needs to look for something.
-        // Common patterns:
-        // - ApplicationProperties["x-delay"] in milliseconds (Rabbit plugin style)
-        // - ApplicationProperties["delaySeconds"]
         if (delaySeconds > 0)
         {
             msg.ApplicationProperties ??= new ApplicationProperties();

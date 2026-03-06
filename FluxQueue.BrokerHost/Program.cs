@@ -1,47 +1,200 @@
+using FluxQueue.BrokerHost.Configuration;
+using FluxQueue.BrokerHost.Http;
 using FluxQueue.BrokerHost.Services;
 using FluxQueue.Core;
-using FluxQueue.Core.Adapters;
 using FluxQueue.Transport.Abstractions;
 using FluxQueue.Transport.Amqp;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddGrpc();
 
-// RocksDB path should be config-driven
-var dbPath = builder.Configuration["FluxQueue:DbPath"] ?? "./data/rocksdb";
-builder.Services.AddSingleton(_ =>
+//
+// --------------------
+// Bind configuration
+// --------------------
+//
+
+builder.Services
+    .AddOptions<FluxQueueOptions>()
+    .Bind(builder.Configuration.GetSection(FluxQueueOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services
+    .AddOptions<QueueReconcilerOptions>()
+    .Bind(builder.Configuration.GetSection($"{FluxQueueOptions.SectionName}:Reconciler"))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services
+    .AddOptions<QueueSweeperOptions>()
+    .Bind(builder.Configuration.GetSection($"{FluxQueueOptions.SectionName}:Sweeper"))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+//
+// --------------------
+// Core services
+// --------------------
+//
+
+builder.Services.AddSingleton(sp =>
 {
-    Directory.CreateDirectory(dbPath);
-    return new QueueEngine(dbPath);
+    var options = sp.GetRequiredService<IOptions<FluxQueueOptions>>().Value;
+
+    Directory.CreateDirectory(options.DbPath);
+    return new QueueEngine(options.DbPath);
 });
 
-// Background sweep: MVP needs it
-builder.Services.Configure<QueueReconcilerOptions>(builder.Configuration.GetSection("FluxQueue:Reconciler"));
-builder.Services.AddHostedService<QueueReconcilerHostedService>();
-builder.Services.Configure<QueueSweeperOptions>(builder.Configuration.GetSection("FluxQueue:Sweeper"));
-builder.Services.AddHostedService<QueueSweeper>();
-builder.Services.AddHealthChecks();
+builder.Services.AddSingleton<IQueuePolicyProvider, QueuePolicyProvider>();
+builder.Services.AddSingleton<IQueueRequestValidator, QueueRequestValidator>();
 builder.Services.AddSingleton<IQueueOperations, QueueEngineOperations>();
+
+//
+// --------------------
+// Background workers
+// --------------------
+//
+
+builder.Services.AddHostedService<QueueReconcilerHostedService>();
+builder.Services.AddHostedService<QueueSweeper>();
+
+//
+// --------------------
+// AMQP broker
+// --------------------
+//
+
+var fluxQueueOptions = builder.Configuration
+    .GetSection(FluxQueueOptions.SectionName)
+    .Get<FluxQueueOptions>() ?? new FluxQueueOptions();
+
 builder.Services.AddFluxQueueAmqp(o =>
 {
-    o.Port = 5672;
-    o.DefaultVisibilityTimeoutSeconds = 30; // match your typical default
-    o.DefaultWaitSeconds = 1;               // enable long poll
-    o.MaxBatch = 50;
+    o.Port = fluxQueueOptions.Amqp.Port;
+    o.DefaultVisibilityTimeoutSeconds = fluxQueueOptions.Amqp.DefaultVisibilityTimeoutSeconds;
+    o.DefaultWaitSeconds = fluxQueueOptions.Amqp.DefaultWaitSeconds;
+    o.MaxBatch = fluxQueueOptions.Amqp.MaxBatch;
 });
+
+//
+// --------------------
+// Health checks
+// --------------------
+//
+
+builder.Services.AddHealthChecks();
+
+//
+// --------------------
+// Kestrel configuration
+// --------------------
+//
+
 builder.WebHost.ConfigureKestrel((context, options) =>
 {
-    options.Configure(context.Configuration.GetSection("Kestrel"));
+    var kestrelSection = context.Configuration.GetSection("Kestrel");
+
+    if (kestrelSection.Exists())
+    {
+        options.Configure(kestrelSection);
+    }
+    else
+    {
+        options.ListenAnyIP(8080, listen =>
+        {
+            listen.Protocols = HttpProtocols.Http1;
+        });
+
+        options.ListenAnyIP(8081, listen =>
+        {
+            listen.Protocols = HttpProtocols.Http2;
+        });
+    }
 });
 
 var app = builder.Build();
-// ----- HTTP -----
+
+var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
+
+lifetime.ApplicationStopping.Register(() =>
+{
+    var logger = app.Services
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("FluxQueue.Shutdown");
+
+    logger.LogInformation("FluxQueue shutting down gracefully...");
+
+    try
+    {
+        var engine = app.Services.GetRequiredService<QueueEngine>();
+        engine.Dispose();
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error during QueueEngine shutdown");
+    }
+});
+
+//
+// --------------------
+// Health endpoints
+// --------------------
+//
+
+app.MapGet("/health/live", () => Results.Ok(new
+{
+    status = "ok",
+    service = "fluxqueue-broker"
+}));
+
+app.MapGet("/health/ready", (IOptions<FluxQueueOptions> options) =>
+{
+    return Results.Ok(new
+    {
+        status = "ready",
+        dbPath = options.Value.DbPath
+    });
+});
+
+app.MapHealthChecks("/health");
+
+//
+// --------------------
+// HTTP API
+// --------------------
+//
+
 app.MapQueueHttpEndpoints();
-// ----- gRPC -----
+
+//
+// --------------------
+// gRPC API
+// --------------------
+//
+
 app.MapGrpcService<QueueBrokerGrpcService>();
 
-app.MapGet("/", () => "FluxQueue Broker running (HTTP + gRPC).");
+//
+// --------------------
+// Root endpoint
+// --------------------
+//
+
+app.MapGet("/", (IOptions<FluxQueueOptions> options) =>
+{
+    return Results.Ok(new
+    {
+        service = "FluxQueue Broker",
+        protocols = new[] { "HTTP", "gRPC", "AMQP" },
+        httpPort = 8080,
+        grpcPort = 8081,
+        amqpPort = options.Value.Amqp.Port,
+        dbPath = options.Value.DbPath
+    });
+});
 
 app.Run();

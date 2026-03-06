@@ -9,6 +9,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="data\**" />
+    <Content Remove="data\**" />
+    <EmbeddedResource Remove="data\**" />
+    <None Remove="data\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Google.Protobuf" Version="3.33.5" />
     <PackageReference Include="Grpc.AspNetCore" Version="2.76.0" />
     <PackageReference Include="Grpc.Tools" Version="2.78.0">
@@ -27,9 +34,6 @@
     <ProjectReference Include="..\FluxQueue.Core\FluxQueue.Core.csproj" />
     <ProjectReference Include="..\FluxQueue.Transport.Abstractions\FluxQueue.Transport.Abstractions.csproj" />
     <ProjectReference Include="..\FluxQueue.Transport.Amqp\FluxQueue.Transport.Amqp.csproj" />
-  </ItemGroup>
-  <ItemGroup>
-    <Folder Include="data\" />
   </ItemGroup>
 
 </Project>

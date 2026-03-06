@@ -9,9 +9,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using FluxQueue.Core;
-using FluxQueue.Core.Adapters;
 using FluxQueue.Transport.Abstractions;
 using FluxQueue.Transport.Amqp;
+using FluxQueue.BrokerHost.Services;
 
 namespace FluxQueue.IntegrationTests.TestHost;
 
