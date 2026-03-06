@@ -118,6 +118,27 @@ builder.WebHost.ConfigureKestrel((context, options) =>
 
 var app = builder.Build();
 
+var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
+
+lifetime.ApplicationStopping.Register(() =>
+{
+    var logger = app.Services
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("FluxQueue.Shutdown");
+
+    logger.LogInformation("FluxQueue shutting down gracefully...");
+
+    try
+    {
+        var engine = app.Services.GetRequiredService<QueueEngine>();
+        engine.Dispose();
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error during QueueEngine shutdown");
+    }
+});
+
 //
 // --------------------
 // Health endpoints
