@@ -3,7 +3,7 @@
 public sealed record SendRequest(
     string Queue,
     byte[] Payload,
-    int DelaySeconds = 0,
-    int MaxReceiveCount = 5,
-    IReadOnlyDictionary<string, object?>? Headers = null
+    int? DelaySeconds = null,
+    int? MaxReceiveCount = null,
+    IReadOnlyDictionary<string, string>? Headers = null
 );
