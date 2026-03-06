@@ -26,7 +26,7 @@ public sealed class QueueSweeper : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _log.LogInformation("QueueSweeper started. SweepInterval={SweepInterval} IdleInterval={IdleInterval} MaxToProcessPerQueue={Max}",
-            _opt.SweepInterval, _opt.IdleInterval, _opt.MaxToProcessPerQueue);
+            _opt.BusyDelayMs, _opt.IdleDelayMs, _opt.MaxQueuesPerTick);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -34,7 +34,7 @@ public sealed class QueueSweeper : BackgroundService
 
             if (queues.Count == 0)
             {
-                await Task.Delay(_opt.IdleInterval, stoppingToken);
+                await Task.Delay(_opt.IdleDelayMs, stoppingToken);
                 continue;
             }
 
@@ -53,7 +53,7 @@ public sealed class QueueSweeper : BackgroundService
                 {
                     var processed = await _engine.SweepExpiredAsync(
                         queue: q,
-                        maxToProcess: _opt.MaxToProcessPerQueue,
+                        maxToProcess: _opt.MaxQueuesPerTick,
                         ct: stoppingToken);
 
                     totalProcessed += processed;
@@ -77,7 +77,7 @@ public sealed class QueueSweeper : BackgroundService
 
             // If we did actual work, loop soon (keeps redelivery snappy).
             // If we did no work, pause (reduces CPU churn).
-            var delay = totalProcessed > 0 ? _opt.SweepInterval : _opt.IdleInterval;
+            var delay = totalProcessed > 0 ? _opt.BusyDelayMs : _opt.IdleDelayMs;
             await Task.Delay(delay, stoppingToken);
         }
     }
