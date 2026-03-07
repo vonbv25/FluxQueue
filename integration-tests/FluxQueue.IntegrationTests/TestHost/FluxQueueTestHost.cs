@@ -23,6 +23,7 @@ public sealed class FluxQueueTestHost : IAsyncDisposable
 
     public int AmqpPort { get; }
     public string DbPath { get; }
+    public string AmqpHost => "127.0.0.1";
 
     public FluxQueueTestHost()
     {
@@ -34,7 +35,13 @@ public sealed class FluxQueueTestHost : IAsyncDisposable
         {
             [$"{FluxQueueOptions.SectionName}:DbPath"] = DbPath,
             [$"{FluxQueueOptions.SectionName}:Reconciler:Enabled"] = "false",
-            [$"{FluxQueueOptions.SectionName}:Sweeper:Enabled"] = "false"
+            [$"{FluxQueueOptions.SectionName}:Sweeper:Enabled"] = "false",
+
+            [$"{AmqpTransportOptions.SectionName}:Port"] = AmqpPort.ToString(),
+            [$"{AmqpTransportOptions.SectionName}:DefaultVisibilityTimeoutSeconds"] = "2",
+            [$"{AmqpTransportOptions.SectionName}:DefaultWaitSeconds"] = "1",
+            [$"{AmqpTransportOptions.SectionName}:EgressInitialCredit"] = "50",
+            [$"{AmqpTransportOptions.SectionName}:IngressInitialCredit"] = "200"
         };
 
         var configuration = new ConfigurationBuilder()
@@ -53,40 +60,36 @@ public sealed class FluxQueueTestHost : IAsyncDisposable
                 services.AddSingleton<IConfiguration>(configuration);
 
                 services.AddFluxQueue(configuration);
-
-                services.AddFluxQueueAmqp(o =>
-                {
-                    o.Port = AmqpPort;
-                    o.DefaultVisibilityTimeoutSeconds = 2;
-                    o.DefaultWaitSeconds = 1;
-                    o.MaxBatch = 50;
-                });
+                services.AddFluxQueueAmqp(configuration);
             })
             .Build();
     }
+
+    public async Task StartAsync()
+    {
+        await _host.StartAsync();
+
+        // allow listener socket bind/startup to settle in tests
+        await Task.Delay(150);
+    }
+
+    public Task StopAsync() => _host.StopAsync();
 
     public async Task<int> SweepQueueAsync(string queue, int maxToProcess = 1000, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(queue))
             throw new ArgumentNullException(nameof(queue));
 
-        // Resolve the same singleton QueueEngine used by AMQP transport
         var engine = _host.Services.GetRequiredService<QueueEngine>();
-
-        // Run sweep once (your tests can call this deterministically)
         return await engine.SweepExpiredAsync(queue, maxToProcess, ct);
     }
 
-    public async Task StartAsync() => await _host.StartAsync();
-
-    public async Task StopAsync() => await _host.StopAsync();
-
     public async ValueTask DisposeAsync()
     {
-        try { await _host.StopAsync(); } catch { /* ignore */ }
+        try { await _host.StopAsync(); } catch { }
         _host.Dispose();
 
-        try { Directory.Delete(DbPath, recursive: true); } catch { /* ignore */ }
+        try { Directory.Delete(DbPath, recursive: true); } catch { }
     }
 
     private static int GetFreeTcpPort()
