@@ -12,6 +12,7 @@ public static class ServiceCollectionExtensions
         else
             services.AddOptions<AmqpTransportOptions>();
         services.AddHostedService<AmqpHostedService>();
+        services.AddSingleton<IFluxQueueAmqpEndpointFactory, FluxQueueAmqpEndpointFactory>();
         return services;
     }
 }

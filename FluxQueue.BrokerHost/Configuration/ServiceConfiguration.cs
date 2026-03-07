@@ -40,6 +40,15 @@ public static class FluxQueueServiceCollectionExtensions
         services.AddSingleton<IQueueRequestValidator, QueueRequestValidator>();
         services.AddSingleton<IQueueOperations, QueueEngineOperations>();
 
+        //
+        // --------------------
+        // Background workers
+        // --------------------
+        //
+
+        services.AddHostedService<QueueReconcilerHostedService>();
+        services.AddHostedService<QueueSweeper>();
+
         return services;
     }
 

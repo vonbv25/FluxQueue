@@ -13,14 +13,6 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddGrpc();
 
 builder.ConfigureServices();
-//
-// --------------------
-// Background workers
-// --------------------
-//
-
-builder.Services.AddHostedService<QueueReconcilerHostedService>();
-builder.Services.AddHostedService<QueueSweeper>();
 
 //
 // --------------------
