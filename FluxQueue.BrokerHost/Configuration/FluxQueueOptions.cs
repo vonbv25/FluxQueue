@@ -1,4 +1,5 @@
 ﻿using FluxQueue.BrokerHost.Services;
+using FluxQueue.Transport.Amqp;
 using System.ComponentModel.DataAnnotations;
 
 namespace FluxQueue.BrokerHost.Configuration;
@@ -17,7 +18,7 @@ public sealed class FluxQueueOptions
     public QueueSweeperOptions Sweeper { get; set; } = new();
 
     [Required]
-    public FluxQueueAmqpOptions Amqp { get; set; } = new();
+    public AmqpTransportOptions Amqp { get; set; } = new();
 
     [Required]
     public FluxQueueDefaultsOptions Defaults { get; set; } = new();

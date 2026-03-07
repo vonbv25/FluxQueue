@@ -1,6 +1,7 @@
 ﻿using FluxQueue.BrokerHost.Services;
 using FluxQueue.Core;
 using FluxQueue.Transport.Abstractions;
+using FluxQueue.Transport.Amqp;
 using Microsoft.Extensions.Options;
 
 namespace FluxQueue.BrokerHost.Configuration;
@@ -39,12 +40,6 @@ public static class FluxQueueServiceCollectionExtensions
         services.AddSingleton<IQueuePolicyProvider, QueuePolicyProvider>();
         services.AddSingleton<IQueueRequestValidator, QueueRequestValidator>();
         services.AddSingleton<IQueueOperations, QueueEngineOperations>();
-
-        //
-        // --------------------
-        // Background workers
-        // --------------------
-        //
 
         services.AddHostedService<QueueReconcilerHostedService>();
         services.AddHostedService<QueueSweeper>();

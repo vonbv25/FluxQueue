@@ -11,6 +11,7 @@ namespace FluxQueue.IntegrationTests.Amqp;
 [TestFixture]
 public sealed class AmqpIntegrationTests
 {
+    private const string Host = "127.0.0.1";
     private FluxQueueTestHost _host = null!;
 
     [OneTimeSetUp]
@@ -30,11 +31,11 @@ public sealed class AmqpIntegrationTests
     {
         var queue = "batchq";
 
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("m1"));
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("m2"));
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("m1"));
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("m2"));
 
         var (a, rx) = await AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
+            Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
 
         Assert.That(a, Is.Not.Null);
         rx.Accept(a!);
@@ -53,12 +54,12 @@ public sealed class AmqpIntegrationTests
     public async Task Messages_Should_BeReceived_InSendOrder_OnSingleReceiver()
     {
         var queue = "orderq";
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("1"));
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("2"));
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("3"));
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("1"));
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("2"));
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("3"));
 
         var (m1, rx) = await AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
+            Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
         Assert.That(m1, Is.Not.Null);
         Assert.That(Encoding.UTF8.GetString((byte[])m1!.Body), Is.EqualTo("1"));
         rx.Accept(m1);
@@ -82,10 +83,10 @@ public sealed class AmqpIntegrationTests
     public async Task AcceptingSameDeliveryTwice_ShouldNotBreak()
     {
         var queue = "idempotentq";
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("dup-accept"));
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("dup-accept"));
 
         var (msg, rx) = await AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
+            Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
         Assert.That(msg, Is.Not.Null);
 
         // First accept
@@ -98,7 +99,7 @@ public sealed class AmqpIntegrationTests
 
         // Ensure no re-delivery
         var (msg2, rx2) = await AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(1));
+            Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(1));
         Assert.That(msg2, Is.Null);
         await AmqpClient.CloseReceiverAsync(rx2);
     }
@@ -106,11 +107,11 @@ public sealed class AmqpIntegrationTests
     public async Task UnsettledDelivery_Should_Redeliver_ToAnotherConsumer_AfterSweep()
     {
         var queue = "handoffq";
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("handoff"));
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("handoff"));
 
         // Consumer A receives but doesn't accept
         var (m1, rx1) = await AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
+            Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
         Assert.That(m1, Is.Not.Null);
 
         await AmqpClient.CloseReceiverAsync(rx1);
@@ -121,7 +122,7 @@ public sealed class AmqpIntegrationTests
 
         // Consumer B should receive it
         var (m2, rx2) = await AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
+            Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
         Assert.That(m2, Is.Not.Null);
 
         rx2.Accept(m2!);
@@ -134,11 +135,11 @@ public sealed class AmqpIntegrationTests
 
         // Start a long poll receive (3s)
         var receiveTask = AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
+            Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
 
         // Send after a short delay
         await Task.Delay(TimeSpan.FromMilliseconds(500));
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("late"));
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("late"));
 
         var (msg, rx) = await receiveTask;
         Assert.That(msg, Is.Not.Null);
@@ -152,7 +153,7 @@ public sealed class AmqpIntegrationTests
         var queue = "emptyq";
 
         var (msg, rx) = await AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(1));
+            Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(1));
 
         Assert.That(msg, Is.Null);
         await AmqpClient.CloseReceiverAsync(rx);
@@ -164,10 +165,10 @@ public sealed class AmqpIntegrationTests
         var queue = "orders";
         var payload = Encoding.UTF8.GetBytes("hello");
 
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, payload);
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, payload);
 
         var (msg, rx) = await AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
+            Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
 
         Assert.That(msg, Is.Not.Null);
         Assert.That(Encoding.UTF8.GetString(AmqpClient.GetPayload(msg!)), Is.EqualTo("hello"));
@@ -177,7 +178,7 @@ public sealed class AmqpIntegrationTests
 
         // should be empty now
         var (msg2, rx2) = await AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(1));
+            Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(1));
 
         Assert.That(msg2, Is.Null);
         await AmqpClient.CloseReceiverAsync(rx2);
@@ -188,10 +189,10 @@ public sealed class AmqpIntegrationTests
         var queue = "retryq";
         var payload = Encoding.UTF8.GetBytes("will-redeliver");
 
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, payload);
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, payload);
 
         var (msg, rx) = await AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
+            Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
 
         Assert.That(msg, Is.Not.Null);
 
@@ -202,7 +203,7 @@ public sealed class AmqpIntegrationTests
         await _host.SweepQueueAsync(queue);
 
         var (msg2, rx2) = await AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
+            Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
 
         Assert.That(msg2, Is.Not.Null);
         Assert.That(Encoding.UTF8.GetString(AmqpClient.GetPayload(msg2!)), Is.EqualTo("will-redeliver"));
@@ -215,10 +216,10 @@ public sealed class AmqpIntegrationTests
     public async Task CompetingConsumers_Should_NotBothReceiveSameMessage()
     {
         var queue = "competeq";
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("x"));
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("x"));
 
-        var t1 = AmqpClient.ReceiveOnceAsync("127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
-        var t2 = AmqpClient.ReceiveOnceAsync("127.0.0.1", _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
+        var t1 = AmqpClient.ReceiveOnceAsync(Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
+        var t2 = AmqpClient.ReceiveOnceAsync(Host, _host.AmqpPort, queue, TimeSpan.FromSeconds(3));
 
         await Task.WhenAll(t1, t2);
 
@@ -239,7 +240,7 @@ public sealed class AmqpIntegrationTests
     {
         var queue = "competeq";
 
-        var addr = new Address("127.0.0.1", _host.AmqpPort, null, null, scheme: "amqp");
+        var addr = new Address(Host, _host.AmqpPort, null, null, scheme: "amqp");
 
         // Consumer 1
         var conn1 = await Connection.Factory.CreateAsync(addr);
@@ -256,7 +257,7 @@ public sealed class AmqpIntegrationTests
         try
         {
             // Now send AFTER both consumers are attached and have credit
-            await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("x"));
+            await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("x"));
 
             // Wait for delivery concurrently
             var t1 = rx1.ReceiveAsync(TimeSpan.FromSeconds(5));
@@ -291,11 +292,11 @@ public sealed class AmqpIntegrationTests
     {
         var queue = "orderq";
 
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("1"));
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("2"));
-        await AmqpClient.SendAsync("127.0.0.1", _host.AmqpPort, queue, Encoding.UTF8.GetBytes("3"));
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("1"));
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("2"));
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("3"));
 
-        var addr = new Address("127.0.0.1", _host.AmqpPort, null, null, scheme: "amqp");
+        var addr = new Address(Host, _host.AmqpPort, null, null, scheme: "amqp");
         var conn = await Connection.Factory.CreateAsync(addr);
         var sess = new Session(conn);
         var rx = new ReceiverLink(sess, "rx-" + Guid.NewGuid().ToString("N"), queue);
@@ -332,10 +333,116 @@ public sealed class AmqpIntegrationTests
     public async Task Receive_WhenQueueEmpty_Should_ReturnNull()
     {
         var (msg, rx) = await AmqpClient.ReceiveOnceAsync(
-            "127.0.0.1", _host.AmqpPort, "emptyq", TimeSpan.FromSeconds(1));
+            Host, _host.AmqpPort, "emptyq", TimeSpan.FromSeconds(1));
 
         Assert.That(msg, Is.Null);
         await AmqpClient.CloseReceiverAsync(rx);
+    }
+
+    [Test]
+    public async Task Accept_Should_Remove_Message()
+    {
+        var queue = "orderq";
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("hello"));
+
+        var (msg, rx) = await AmqpClient.ReceiveOnceAsync(
+            Host,
+            _host.AmqpPort,
+            queue,
+            TimeSpan.FromSeconds(5));
+
+        Assert.That(msg, Is.Not.Null);
+        Assert.That(AmqpClient.GetPayloadAsString(msg!), Is.EqualTo("hello"));
+
+        await AmqpClient.AcceptAsync(rx, msg!);
+
+        var (afterAck, rx2) = await AmqpClient.ReceiveOnceAsync(
+            Host,
+            _host.AmqpPort,
+            queue,
+            TimeSpan.FromSeconds(1));
+
+        try
+        {
+            Assert.That(afterAck, Is.Null);
+        }
+        finally
+        {
+            await AmqpClient.CloseReceiverAsync(rx2);
+        }
+    }
+
+    [Test]
+    public async Task Reject_Should_Not_Redeliver_To_Queue()
+    {
+        var queue = "orderq";
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, queue, Encoding.UTF8.GetBytes("reject-me"));
+
+        var (msg, rx) = await AmqpClient.ReceiveOnceAsync(
+            Host,
+            _host.AmqpPort,
+            queue,
+            TimeSpan.FromSeconds(5));
+
+        Assert.That(msg, Is.Not.Null);
+
+        await AmqpClient.RejectAsync(rx, msg!);
+
+        var (again, rx2) = await AmqpClient.ReceiveOnceAsync(
+             Host,
+            _host.AmqpPort,
+            queue,
+            TimeSpan.FromSeconds(1));
+
+        try
+        {
+            Assert.That(again, Is.Null);
+        }
+        finally
+        {
+            await AmqpClient.CloseReceiverAsync(rx2);
+        }
+    }
+
+    [Test]
+    public async Task Release_Should_Redeliver_After_Sweep()
+    {
+        await AmqpClient.SendAsync(Host, _host.AmqpPort, "orderq", Encoding.UTF8.GetBytes("retry-me"));
+
+        var (first, rx1) = await AmqpClient.ReceiveOnceAsync(
+            Host,
+            _host.AmqpPort,
+            "orderq",
+            TimeSpan.FromSeconds(5));
+
+        Assert.That(first, Is.Not.Null);
+
+        await AmqpClient.ReleaseAsync(rx1, first!);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(2200));
+        await _host.SweepQueueAsync("orderq");
+
+        var (second, rx2) = await AmqpClient.ReceiveOnceAsync(
+            Host,
+            _host.AmqpPort,
+            "orderq",
+            TimeSpan.FromSeconds(5));
+
+        try
+        {
+            Assert.That(second, Is.Not.Null);
+            Assert.That(AmqpClient.GetPayloadAsString(second!), Is.EqualTo("retry-me"));
+
+            var receiveCount = AmqpClient.TryGetApplicationInt(second!, "x-receive-count");
+            Assert.That(receiveCount, Is.GreaterThanOrEqualTo(2));
+        }
+        finally
+        {
+            if (second is not null)
+                await AmqpClient.AcceptAsync(rx2, second);
+            else
+                await AmqpClient.CloseReceiverAsync(rx2);
+        }
     }
 
     //[Test]

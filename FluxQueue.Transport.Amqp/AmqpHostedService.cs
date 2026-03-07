@@ -18,7 +18,12 @@ public sealed class AmqpHostedService(
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var uri = $"amqp://{_opt.DefaultAddress}:{_opt.Port}";
+        if (!_opt.Enabled)
+        {
+            log.LogInformation("Amqp is disabled.");
+            return Task.CompletedTask;
+        }
+        var uri = $"amqp://{_opt.BindAddress}:{_opt.Port}";
 
         _host = new ContainerHost(new[] { uri });
         _host.RegisterLinkProcessor(new FluxQueueLinkProcessor(_fluxQueueAmqpEndpointFactory, _opt, loggerFactory.CreateLogger<FluxQueueLinkProcessor>()));
