@@ -199,7 +199,6 @@ public static class QueueHttpEndpoints
             var ok = await ops.AckAsync(queue, receiptHandle, ct);
             return ok ? Results.NoContent() : Results.NotFound();
         });
-
         return app;
     }
 
