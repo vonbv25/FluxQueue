@@ -34,7 +34,7 @@ jobs:
       - name: Run unit tests inside container
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}:/workspace" \
+            -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             fluxqueue-test \
             bash -c "

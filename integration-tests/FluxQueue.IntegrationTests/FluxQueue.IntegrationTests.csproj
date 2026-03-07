@@ -16,12 +16,13 @@
     <PackageReference Include="NUnit" Version="4.2.2" />
     <PackageReference Include="NUnit.Analyzers" Version="4.3.0" />
     <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+    <PackageReference Include="RocksDbNative" Version="6.2.2" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FluxQueue.BrokerHost\FluxQueue.BrokerHost.csproj" />
-    <ProjectReference Include="..\FluxQueue.Core\FluxQueue.Core.csproj" />
-    <ProjectReference Include="..\FluxQueue.Transport.Amqp\FluxQueue.Transport.Amqp.csproj" />
+    <ProjectReference Include="..\..\FluxQueue.BrokerHost\FluxQueue.BrokerHost.csproj" />
+    <ProjectReference Include="..\..\FluxQueue.Core\FluxQueue.Core.csproj" />
+    <ProjectReference Include="..\..\FluxQueue.Transport.Amqp\FluxQueue.Transport.Amqp.csproj" />
   </ItemGroup>
 
   <ItemGroup>

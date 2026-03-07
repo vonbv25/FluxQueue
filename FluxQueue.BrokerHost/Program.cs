@@ -1,3 +1,4 @@
+using FluxQueue.BrokerHost;
 using FluxQueue.BrokerHost.Configuration;
 using FluxQueue.BrokerHost.Http;
 using FluxQueue.BrokerHost.Services;
@@ -11,48 +12,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddGrpc();
 
-//
-// --------------------
-// Bind configuration
-// --------------------
-//
-
-builder.Services
-    .AddOptions<FluxQueueOptions>()
-    .Bind(builder.Configuration.GetSection(FluxQueueOptions.SectionName))
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
-builder.Services
-    .AddOptions<QueueReconcilerOptions>()
-    .Bind(builder.Configuration.GetSection($"{FluxQueueOptions.SectionName}:Reconciler"))
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
-builder.Services
-    .AddOptions<QueueSweeperOptions>()
-    .Bind(builder.Configuration.GetSection($"{FluxQueueOptions.SectionName}:Sweeper"))
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
-//
-// --------------------
-// Core services
-// --------------------
-//
-
-builder.Services.AddSingleton(sp =>
-{
-    var options = sp.GetRequiredService<IOptions<FluxQueueOptions>>().Value;
-
-    Directory.CreateDirectory(options.DbPath);
-    return new QueueEngine(options.DbPath);
-});
-
-builder.Services.AddSingleton<IQueuePolicyProvider, QueuePolicyProvider>();
-builder.Services.AddSingleton<IQueueRequestValidator, QueueRequestValidator>();
-builder.Services.AddSingleton<IQueueOperations, QueueEngineOperations>();
-
+builder.ConfigureServices();
 //
 // --------------------
 // Background workers
@@ -61,24 +21,6 @@ builder.Services.AddSingleton<IQueueOperations, QueueEngineOperations>();
 
 builder.Services.AddHostedService<QueueReconcilerHostedService>();
 builder.Services.AddHostedService<QueueSweeper>();
-
-//
-// --------------------
-// AMQP broker
-// --------------------
-//
-
-var fluxQueueOptions = builder.Configuration
-    .GetSection(FluxQueueOptions.SectionName)
-    .Get<FluxQueueOptions>() ?? new FluxQueueOptions();
-
-builder.Services.AddFluxQueueAmqp(o =>
-{
-    o.Port = fluxQueueOptions.Amqp.Port;
-    o.DefaultVisibilityTimeoutSeconds = fluxQueueOptions.Amqp.DefaultVisibilityTimeoutSeconds;
-    o.DefaultWaitSeconds = fluxQueueOptions.Amqp.DefaultWaitSeconds;
-    o.MaxBatch = fluxQueueOptions.Amqp.MaxBatch;
-});
 
 //
 // --------------------

@@ -12,6 +12,8 @@ using FluxQueue.Core;
 using FluxQueue.Transport.Abstractions;
 using FluxQueue.Transport.Amqp;
 using FluxQueue.BrokerHost.Services;
+using FluxQueue.BrokerHost.Configuration;
+using Microsoft.Extensions.Configuration;
 
 namespace FluxQueue.IntegrationTests.TestHost;
 
@@ -28,6 +30,17 @@ public sealed class FluxQueueTestHost : IAsyncDisposable
         DbPath = Path.Combine(Path.GetTempPath(), "fluxqueue-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(DbPath);
 
+        var configData = new Dictionary<string, string?>
+        {
+            [$"{FluxQueueOptions.SectionName}:DbPath"] = DbPath,
+            [$"{FluxQueueOptions.SectionName}:Reconciler:Enabled"] = "false",
+            [$"{FluxQueueOptions.SectionName}:Sweeper:Enabled"] = "false"
+        };
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(configData)
+            .Build();
+
         _host = Host.CreateDefaultBuilder()
             .ConfigureLogging(l =>
             {
@@ -37,16 +50,14 @@ public sealed class FluxQueueTestHost : IAsyncDisposable
             })
             .ConfigureServices(services =>
             {
-                services.AddSingleton(_ => new QueueEngine(DbPath));
+                services.AddSingleton<IConfiguration>(configuration);
 
-                // Your adapter (QueueEngine -> IQueueOperations)
-                services.AddSingleton<IQueueOperations, QueueEngineOperations>();
+                services.AddFluxQueue(configuration);
 
-                // AMQP transport hosted service
                 services.AddFluxQueueAmqp(o =>
                 {
                     o.Port = AmqpPort;
-                    o.DefaultVisibilityTimeoutSeconds = 2; // small for tests
+                    o.DefaultVisibilityTimeoutSeconds = 2;
                     o.DefaultWaitSeconds = 1;
                     o.MaxBatch = 50;
                 });

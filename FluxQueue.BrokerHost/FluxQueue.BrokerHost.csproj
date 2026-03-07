@@ -30,7 +30,6 @@
 	<Protobuf Include="Protos\queuebroker.proto" GrpcServices="Server" />
 </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\FluxQueue.Core.Adapters\FluxQueue.Core.Adapters.csproj" />
     <ProjectReference Include="..\FluxQueue.Core\FluxQueue.Core.csproj" />
     <ProjectReference Include="..\FluxQueue.Transport.Abstractions\FluxQueue.Transport.Abstractions.csproj" />
     <ProjectReference Include="..\FluxQueue.Transport.Amqp\FluxQueue.Transport.Amqp.csproj" />
