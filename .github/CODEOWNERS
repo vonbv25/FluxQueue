@@ -1,0 +1,44 @@
+# ------------------------------------------------------------
+# FluxQueue Repository Ownership
+# ------------------------------------------------------------
+
+# Default owner for the entire repository
+* @vonbv25
+
+
+# ------------------------------------------------------------
+# Critical infrastructure protection
+# ------------------------------------------------------------
+
+# CI/CD pipelines
+.github/workflows/* @vonbv25
+
+# Repository governance
+.github/CODEOWNERS @vonbv25
+
+# Docker container builds
+Dockerfile @vonbv25
+Dockerfile.test @vonbv25
+
+
+# ------------------------------------------------------------
+# Core application components
+# ------------------------------------------------------------
+
+# Queue engine core
+FluxQueue.Core/* @vonbv25
+FluxQueue.Transport/* @vonbv25
+
+# Broker host
+FluxQueue.BrokerHost/* @vonbv25
+
+
+# ------------------------------------------------------------
+# Testing infrastructure
+# ------------------------------------------------------------
+
+# Unit tests
+unit-tests/* @vonbv25
+
+# Integration tests
+integration-tests/* @vonbv25

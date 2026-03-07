@@ -1,56 +1,142 @@
+using FluxQueue.BrokerHost;
+using FluxQueue.BrokerHost.Configuration;
+using FluxQueue.BrokerHost.Http;
 using FluxQueue.BrokerHost.Services;
 using FluxQueue.Core;
+using FluxQueue.Transport.Abstractions;
+using FluxQueue.Transport.Amqp;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddGrpc();
 
-// RocksDB path should be config-driven
-var dbPath = builder.Configuration["FluxQueue:DbPath"] ?? "./data/rocksdb";
-builder.Services.AddSingleton(_ => new QueueEngine(dbPath));
+builder.ConfigureServices();
+//
+// --------------------
+// Background workers
+// --------------------
+//
 
-// Background sweep: MVP needs it
+builder.Services.AddHostedService<QueueReconcilerHostedService>();
 builder.Services.AddHostedService<QueueSweeper>();
 
-builder.WebHost.ConfigureKestrel(o =>
+//
+// --------------------
+// Health checks
+// --------------------
+//
+
+builder.Services.AddHealthChecks();
+
+//
+// --------------------
+// Kestrel configuration
+// --------------------
+//
+
+builder.WebHost.ConfigureKestrel((context, options) =>
 {
-    o.ListenAnyIP(5000, listen => listen.Protocols = HttpProtocols.Http1AndHttp2);
+    var kestrelSection = context.Configuration.GetSection("Kestrel");
+
+    if (kestrelSection.Exists())
+    {
+        options.Configure(kestrelSection);
+    }
+    else
+    {
+        options.ListenAnyIP(8080, listen =>
+        {
+            listen.Protocols = HttpProtocols.Http1;
+        });
+
+        options.ListenAnyIP(8081, listen =>
+        {
+            listen.Protocols = HttpProtocols.Http2;
+        });
+    }
 });
 
 var app = builder.Build();
 
-// ----- HTTP -----
-app.MapPost("/queues/{queue}/messages", async (string queue, SendDto dto, QueueEngine engine) =>
-{
-    var payload = dto.PayloadBase64 is null ? Array.Empty<byte>() : Convert.FromBase64String(dto.PayloadBase64);
-    var id = await engine.SendAsync(queue, payload, dto.DelaySeconds, dto.MaxReceiveCount);
-    return Results.Ok(new { messageId = id });
-});
+var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
 
-app.MapPost("/queues/{queue}/messages:receive", async (string queue, ReceiveDto dto, QueueEngine engine) =>
+lifetime.ApplicationStopping.Register(() =>
 {
-    var msgs = await engine.ReceiveAsync(queue, dto.MaxMessages, dto.VisibilityTimeoutSeconds, dto.WaitSeconds);
-    return Results.Ok(msgs.Select(m => new
+    var logger = app.Services
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("FluxQueue.Shutdown");
+
+    logger.LogInformation("FluxQueue shutting down gracefully...");
+
+    try
     {
-        messageId = m.MessageId,
-        payloadBase64 = Convert.ToBase64String(m.Payload),
-        receiptHandle = m.ReceiptHandle,
-        receiveCount = m.ReceiveCount
-    }));
+        var engine = app.Services.GetRequiredService<QueueEngine>();
+        engine.Dispose();
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error during QueueEngine shutdown");
+    }
 });
 
-app.MapDelete("/queues/{queue}/receipts/{receiptHandle}", async (string queue, string receiptHandle, QueueEngine engine) =>
+//
+// --------------------
+// Health endpoints
+// --------------------
+//
+
+app.MapGet("/health/live", () => Results.Ok(new
 {
-    var ok = await engine.AckAsync(queue, receiptHandle);
-    return ok ? Results.NoContent() : Results.NotFound();
+    status = "ok",
+    service = "fluxqueue-broker"
+}));
+
+app.MapGet("/health/ready", (IOptions<FluxQueueOptions> options) =>
+{
+    return Results.Ok(new
+    {
+        status = "ready",
+        dbPath = options.Value.DbPath
+    });
 });
 
-// ----- gRPC -----
+app.MapHealthChecks("/health");
+
+//
+// --------------------
+// HTTP API
+// --------------------
+//
+
+app.MapQueueHttpEndpoints();
+
+//
+// --------------------
+// gRPC API
+// --------------------
+//
+
 app.MapGrpcService<QueueBrokerGrpcService>();
 
-app.MapGet("/", () => "FluxQueue Broker running (HTTP + gRPC).");
-app.Run();
+//
+// --------------------
+// Root endpoint
+// --------------------
+//
 
-record SendDto(string? PayloadBase64, int DelaySeconds = 0, int MaxReceiveCount = 5);
-record ReceiveDto(int MaxMessages = 1, int VisibilityTimeoutSeconds = 30, int WaitSeconds = 0);
+app.MapGet("/", (IOptions<FluxQueueOptions> options) =>
+{
+    return Results.Ok(new
+    {
+        service = "FluxQueue Broker",
+        protocols = new[] { "HTTP", "gRPC", "AMQP" },
+        httpPort = 8080,
+        grpcPort = 8081,
+        amqpPort = options.Value.Amqp.Port,
+        dbPath = options.Value.DbPath
+    });
+});
+
+app.Run();

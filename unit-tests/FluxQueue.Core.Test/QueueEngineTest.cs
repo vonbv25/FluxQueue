@@ -62,16 +62,26 @@ public class QueueEngineTest
 
         await _engine.SendAsync("retry", payload);
 
-        var received = await _engine.ReceiveAsync("retry", visibilityTimeoutSeconds: 1);
+        // Receive once with a 1s visibility timeout
+        var received = await _engine.ReceiveAsync(
+            "retry",
+            maxMessages: 1,
+            visibilityTimeoutSeconds: 1,
+            waitSeconds: 0);
 
         Assert.That(received.Count, Is.EqualTo(1));
 
-        // Wait for lease to expire
-        await Task.Delay(2500);
+        // Ensure the inflight lease has expired before sweeping
+        await Task.Delay(1500);
 
         await _engine.SweepExpiredAsync("retry");
 
-        var receivedAgain = await _engine.ReceiveAsync("retry");
+        // IMPORTANT: sweep requeues with backoff (~2s + jitter), so long-poll here
+        var receivedAgain = await _engine.ReceiveAsync(
+            "retry",
+            maxMessages: 1,
+            visibilityTimeoutSeconds: 30,
+            waitSeconds: 6);
 
         Assert.That(receivedAgain.Count, Is.EqualTo(1));
         Assert.That(receivedAgain[0].ReceiveCount, Is.EqualTo(2));

@@ -1,6 +1,82 @@
-@FluxQueue.BrokerHost_HostAddress = http://localhost:5256
-
-GET {{FluxQueue.BrokerHost_HostAddress}}/weatherforecast/
-Accept: application/json
+@baseUrl = http://localhost:32772
+@queue = demo
+@messageId = 12314
+@receiptHandle = HsGHooY5DchdOOhgarl_z5x40yJDYOPk
 
 ###
+# Health / Root
+GET {{baseUrl}}/
+Accept: text/plain
+
+###
+# SEND: immediate message
+# Payload is base64. Example below is "hello world"
+POST {{baseUrl}}/queues/{{queue}}/messages
+Content-Type: application/json
+Accept: application/json
+
+{
+  "payloadBase64": "aGVsbG8gd29ybGQ=",
+  "delaySeconds": 0,
+  "maxReceiveCount": 5
+}
+
+###
+# SEND: delayed message (e.g., 5 seconds)
+POST {{baseUrl}}/queues/{{queue}}/messages
+Content-Type: application/json
+Accept: application/json
+
+{
+  "payloadBase64": "ZGVsYXllZCBtZXNzYWdl",
+  "delaySeconds": 5,
+  "maxReceiveCount": 5
+}
+
+###
+# RECEIVE: long-poll style receive
+# waitSeconds: how long server may wait for messages
+# visibilityTimeoutSeconds: how long message stays invisible after receive
+POST {{baseUrl}}/queues/{{queue}}/messages:receive
+Content-Type: application/json
+Accept: application/json
+
+{
+  "maxMessages": 5,
+  "visibilityTimeoutSeconds": 30,
+  "waitSeconds": 10
+}
+
+###
+# ACK: replace {{receiptHandle}} with a value returned by RECEIVE
+# NOTE: receiptHandle may contain URL-unsafe characters.
+# If it does, URL-encode it before pasting here.
+DELETE {{baseUrl}}/queues/{{queue}}/receipts/{{receiptHandle}}
+
+###
+# ACK: example of "not found" ack (invalid handle)
+DELETE {{baseUrl}}/queues/{{queue}}/receipts/invalid-handle-123
+
+###
+# SEND: empty payload (will be sent as empty byte[])
+POST {{baseUrl}}/queues/{{queue}}/messages
+Content-Type: application/json
+Accept: application/json
+
+{
+  "payloadBase64": null,
+  "delaySeconds": 0,
+  "maxReceiveCount": 5
+}
+
+###
+# RECEIVE: single message, short visibility
+POST {{baseUrl}}/queues/{{queue}}/messages:receive
+Content-Type: application/json
+Accept: application/json
+
+{
+  "maxMessages": 1,
+  "visibilityTimeoutSeconds": 5,
+  "waitSeconds": 0
+}

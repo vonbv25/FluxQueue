@@ -361,3 +361,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+/FluxQueue.BrokerHost/data/rocksdb
+/FluxQueue.BrokerHost/Properties/launchSettings.json
+/FluxQueue.BrokerHost/Properties/launchSettings.json
