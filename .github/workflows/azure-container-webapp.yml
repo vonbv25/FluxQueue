@@ -1,0 +1,44 @@
+name: FluxQueue PR-verification
+
+on:
+  push:
+    branches:
+      - master
+      - release
+      - develop
+  pull_request:
+    branches:
+      - master
+      - release
+      - develop
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-unit-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libc6 libgcc-s1 libstdc++6 zlib1g libunwind8
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build solution
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Run unit tests
+        run: dotnet test unit-test/FluxQueue.Core.Test/FluxQueue.Core.Test.csproj --configuration Release --no-build --verbosity normal
