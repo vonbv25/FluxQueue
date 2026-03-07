@@ -41,4 +41,4 @@ jobs:
         run: dotnet build --configuration Release --no-restore
 
       - name: Run unit tests
-        run: dotnet test unit-test/FluxQueue.Core.Test/FluxQueue.Core.Test.csproj --configuration Release --no-build --verbosity normal
+        run: dotnet test unit-tests/FluxQueue.Core.Test/FluxQueue.Core.Test.csproj --configuration Release --no-build --verbosity normal
