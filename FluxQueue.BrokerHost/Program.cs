@@ -1,7 +1,7 @@
 using FluxQueue.BrokerHost;
 using FluxQueue.BrokerHost.Configuration;
-using FluxQueue.BrokerHost.Http;
 using FluxQueue.BrokerHost.Services;
+using FluxQueue.BrokerHost.Services.Http;
 using FluxQueue.Core;
 using FluxQueue.Transport.Abstractions;
 using FluxQueue.Transport.Amqp;
@@ -13,14 +13,6 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddGrpc();
 
 builder.ConfigureServices();
-//
-// --------------------
-// Background workers
-// --------------------
-//
-
-builder.Services.AddHostedService<QueueReconcilerHostedService>();
-builder.Services.AddHostedService<QueueSweeper>();
 
 //
 // --------------------

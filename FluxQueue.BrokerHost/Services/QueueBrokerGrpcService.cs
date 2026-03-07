@@ -57,4 +57,17 @@ public sealed class QueueBrokerGrpcService : QueueBroker.QueueBrokerBase
 
         return new AckGrpcResponse { Acknowledged = ok };
     }
+
+    public override async Task<RejectGrpcResponse> Reject(RejectGrpcRequest request, ServerCallContext context)
+    {
+        var rejected = await _ops.RejectAsync(
+            request.Queue,
+            request.ReceiptHandle,
+            context.CancellationToken);
+
+        return new RejectGrpcResponse
+        {
+            Rejected = rejected
+        };
+    }
 }

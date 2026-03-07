@@ -6,9 +6,6 @@ public sealed class QueueReconcilerOptions
 {
     public bool Enabled { get; set; } = true;
 
-    [Range(1, 86400)]
-    public int IntervalSeconds { get; set; } = 60;
-
     public bool WipeAndRebuildIndexes { get; set; } = false;
 
     [Range(1, 10_000_000)]
