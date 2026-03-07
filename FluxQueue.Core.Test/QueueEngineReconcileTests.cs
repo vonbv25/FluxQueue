@@ -330,25 +330,4 @@ public class QueueEngineReconcileTests
         gid.TryWriteBytes(key.AsSpan(o, 16));
         return key;
     }
-
-    // These call your production helpers (recommended).
-    // If QueueEngineHelpers isn't accessible in tests, tell me where it lives and I’ll adjust.
-    private static byte[] ReadyPrefix(string queue)
-        => QueueEngineHelpers.ReadyPrefix(queue);
-
-    private static byte[] ReadyKey(string queue, long visibleAtMs, long enqueueSeq, string msgId)
-        => QueueEngineHelpers.ReadyKey(queue, visibleAtMs, enqueueSeq, msgId);
-
-    private static byte[] InflightPrefix(string queue)
-        => QueueEngineHelpers.InflightPrefix(queue);
-
-    private static byte[] InflightKey(string queue, long untilMs, string msgId)
-        => QueueEngineHelpers.InflightKey(queue, untilMs, msgId);
-
-    private static void DeleteAllReceiptsForQueue(RocksDb db, ColumnFamilyHandle cfReceipt, string queue)
-    {
-        // If your receipts are not prefix-structured, you can just wipe CF in tests instead.
-        // Here we wipe the whole CF in this test suite when needed.
-        WipeCF(db, cfReceipt);
-    }
 }
