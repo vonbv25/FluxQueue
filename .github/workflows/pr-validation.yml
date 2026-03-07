@@ -19,7 +19,7 @@ concurrency:
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
-
+    name: Build and Run Unit Tests
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
