@@ -681,7 +681,6 @@ public class QueueEngine : IDisposable
 
         return buffer;
     }
-
     private TMeta DeserializeEnvelopeMeta<TMeta>(byte[] value)
     {
         if (value.Length < 4)
@@ -698,7 +697,6 @@ public class QueueEngine : IDisposable
 
         return meta;
     }
-
     private (TMeta meta, ReadOnlyMemory<byte> payload) DeserializeEnvelopeMetaAndPayload<TMeta>(byte[] value)
     {
         if (value.Length < 4)
@@ -716,7 +714,6 @@ public class QueueEngine : IDisposable
         var payload = value.AsMemory(4 + metaLen);
         return (meta, payload);
     }
-
     private byte[] Serialize<T>(T obj) => JsonSerializer.SerializeToUtf8Bytes(obj, _json);
     private T? Deserialize<T>(byte[] bytes) => JsonSerializer.Deserialize<T>(bytes, _json);
 
@@ -745,12 +742,9 @@ public class QueueEngine : IDisposable
                 throw new ArgumentException("Queue name contains invalid characters.", nameof(queue));
         }
     }
-
     private void RegisterQueue(string queue) => _knownQueues.TryAdd(queue, 0);
-
     private long NextEnqueueSeq(string queue) =>
         _enqueueSeq.AddOrUpdate(queue, 1, static (_, current) => checked(current + 1));
-
     private long? TryGetNextReadyVisibleAtMs(string queue)
     {
         var prefix = QueueEngineHelpers.ReadyPrefix(queue);
@@ -779,12 +773,10 @@ public class QueueEngine : IDisposable
 
         return null;
     }
-
     private void RemoveActorReferenceIfCurrent(string queue, QueueActor actor)
     {
         _queueActors.TryRemove(new KeyValuePair<string, QueueActor>(queue, actor));
     }
-
     private void WipeColumnFamily(ColumnFamilyHandle cf, CancellationToken ct)
     {
         using var it = _db.NewIterator(cf);
@@ -812,7 +804,6 @@ public class QueueEngine : IDisposable
         if (wb.Count() > 0)
             _db.Write(wb);
     }
-
     private static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     // -------------------------
@@ -824,14 +815,12 @@ public class QueueEngine : IDisposable
         byte[] Payload,
         string ReceiptHandle,
         int ReceiveCount);
-
     private enum MessageState : byte
     {
         Ready = 1,
         Inflight = 2,
         Dead = 3
     }
-
     private sealed class MessageRecord
     {
         public string Queue { get; set; } = "";
@@ -846,7 +835,6 @@ public class QueueEngine : IDisposable
         public long UpdatedAtMs { get; set; }
         public string? CurrentReceiptHandle { get; set; }
     }
-
     private sealed class ReceiptRecord
     {
         public string Queue { get; set; } = "";
@@ -855,7 +843,6 @@ public class QueueEngine : IDisposable
         public long InflightUntilMs { get; set; }
         public long IssuedAtMs { get; set; }
     }
-
     private sealed class DeadLetterRecord
     {
         public string Queue { get; set; } = "";
