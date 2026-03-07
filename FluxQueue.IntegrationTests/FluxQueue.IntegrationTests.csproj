@@ -16,6 +16,7 @@
     <PackageReference Include="NUnit" Version="4.2.2" />
     <PackageReference Include="NUnit.Analyzers" Version="4.3.0" />
     <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+    <PackageReference Include="RocksDbNative" Version="6.2.2" />
   </ItemGroup>
 
   <ItemGroup>
