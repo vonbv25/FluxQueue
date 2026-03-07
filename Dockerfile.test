@@ -1,0 +1,16 @@
+# Dockerfile.test
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0
+
+# Install native dependencies required by RocksDB
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       libc6 \
+       libc6-dev \
+       libstdc++6 \
+       libgcc-s1 \
+       zlib1g \
+       libunwind8 \
+    && ln -sf /lib/x86_64-linux-gnu/libdl.so.2 /lib/x86_64-linux-gnu/libdl.so || true \
+    && ln -sf /usr/lib/x86_64-linux-gnu/libdl.so.2 /usr/lib/x86_64-linux-gnu/libdl.so || true \
+    && rm -rf /var/lib/apt/lists/*

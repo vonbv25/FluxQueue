@@ -1,0 +1,52 @@
+name: FluxQueue Release Validation
+
+on:
+  push:
+    branches:
+      - release
+  workflow_dispatch:
+
+concurrency:
+  group: release-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-validation:
+    name: Build, Unit Tests, Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Build test container
+        run: |
+          docker build -f Dockerfile.test -t fluxqueue-test .
+
+      - name: Build solution and run unit tests
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            fluxqueue-test \
+            bash -c "
+              dotnet restore &&
+              dotnet build --configuration Release &&
+              dotnet test unit-tests/FluxQueue.Core.Test/FluxQueue.Core.Test.csproj \
+                --configuration Release \
+                --no-build \
+                --verbosity normal
+            "
+
+      - name: Run integration tests
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            fluxqueue-test \
+            bash -c "
+              dotnet test integration-tests/FluxQueue.IntegrationTests/FluxQueue.IntegrationTests.csproj \
+                --configuration Release \
+                --no-build \
+                --verbosity normal
+            "
