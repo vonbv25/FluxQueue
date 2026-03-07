@@ -26,10 +26,10 @@ jobs:
 
       - name: Build test container
         run: |
-        docker build \
-          --cache-from fluxqueue-test \
-          -f Dockerfile.test \
-          -t fluxqueue-test .
+          docker build \
+            --cache-from fluxqueue-test \
+            -f Dockerfile.test \
+            -t fluxqueue-test .
 
       - name: Run unit tests inside container
         run: |
