@@ -6,41 +6,38 @@ using Microsoft.Extensions.Options;
 
 namespace FluxQueue.Transport.Amqp;
 
-public sealed class AmqpHostedService : BackgroundService
+public sealed class AmqpHostedService(
+    IOptions<AmqpTransportOptions> opt,
+    ILogger<AmqpHostedService> log,
+    IFluxQueueAmqpEndpointFactory fluxQueueAmqpEndpointFactory,
+    ILoggerFactory loggerFactory) : BackgroundService
 {
-    private readonly IQueueOperations _ops;
-    private readonly AmqpTransportOptions _opt;
-    private readonly ILogger<AmqpHostedService> _log;
-
+    private readonly AmqpTransportOptions _opt = opt.Value;
+    private readonly IFluxQueueAmqpEndpointFactory _fluxQueueAmqpEndpointFactory = fluxQueueAmqpEndpointFactory;
     private ContainerHost? _host;
-
-    public AmqpHostedService(
-        IQueueOperations ops,
-        IOptions<AmqpTransportOptions> opt,
-        ILogger<AmqpHostedService> log)
-    {
-        _ops = ops;
-        _opt = opt.Value;
-        _log = log;
-    }
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var uri = $"amqp://{_opt.DefaultAddress}:{_opt.Port}";
+        if (!_opt.Enabled)
+        {
+            log.LogInformation("Amqp is disabled.");
+            return Task.CompletedTask;
+        }
+        var uri = $"amqp://{_opt.BindAddress}:{_opt.Port}";
 
         _host = new ContainerHost(new[] { uri });
-        _host.RegisterLinkProcessor(new FluxQueueLinkProcessor(_ops, _opt));
+        _host.RegisterLinkProcessor(new FluxQueueLinkProcessor(_fluxQueueAmqpEndpointFactory, _opt, loggerFactory.CreateLogger<FluxQueueLinkProcessor>()));
 
         _host.Open();
 
-        _log.LogInformation("AMQP transport listening on {Uri}", uri);
+        log.LogInformation("AMQP transport listening on {Uri}", uri);
 
         // Keep running until stopped
         stoppingToken.Register(() =>
         {
             try
             {
-                _log.LogInformation("AMQP transport stopping...");
+                log.LogInformation("AMQP transport stopping...");
                 _host?.Close();
             }
             catch { /* ignore */ }

@@ -1,35 +1,69 @@
-﻿using Amqp;
+﻿using System;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.Threading.Tasks;
+using Amqp;
 using Amqp.Framing;
 using Amqp.Listener;
 using FluxQueue.Transport.Abstractions;
 using FluxQueue.Transport.Abstractions.Models;
+using Microsoft.Extensions.Logging;
 
 namespace FluxQueue.Transport.Amqp;
 
-internal sealed class QueueEgressSource : IMessageSource
+internal sealed class QueueEgressSource : IMessageSource, IDisposable
 {
+    private const string QueuePropertyName = "x-queue";
+    private const string ReceiveCountPropertyName = "x-receive-count";
+
     private readonly IQueueOperations _ops;
     private readonly string _queue;
     private readonly AmqpTransportOptions _opt;
+    private readonly ILogger<QueueEgressSource> _log;
 
-    public QueueEgressSource(IQueueOperations ops, string queue, AmqpTransportOptions opt)
+    private readonly ConcurrentDictionary<ListenerLink, CancellationTokenSource> _linkCts = new();
+    private int _disposed;
+
+    public QueueEgressSource(
+        IQueueOperations ops,
+        string queue,
+        AmqpTransportOptions opt,
+        ILogger<QueueEgressSource> log)
     {
-        _ops = ops;
-        _queue = queue;
-        _opt = opt;
+        _ops = ops ?? throw new ArgumentNullException(nameof(ops));
+        _queue = !string.IsNullOrWhiteSpace(queue)
+            ? queue
+            : throw new ArgumentException("Queue is required.", nameof(queue));
+        _opt = opt ?? throw new ArgumentNullException(nameof(opt));
+        _log = log ?? throw new ArgumentNullException(nameof(log));
     }
 
     public async Task<ReceiveContext?> GetMessageAsync(ListenerLink link)
     {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+
+        ArgumentNullException.ThrowIfNull(link);
+
+        using var scope = _log.BeginScope("AMQP egress queue {Queue}", _queue);
+
+        var cts = GetOrCreateLinkCts(link);
+        var token = cts.Token;
+
         try
         {
-            // Long-poll a bit (uses your QueueEngine waitSeconds semantics via adapter)
-            var msgs = await _ops.ReceiveAsync(new ReceiveRequest(
-                Queue: _queue,
-                MaxMessages: 1,
-                VisibilityTimeoutSeconds: _opt.DefaultVisibilityTimeoutSeconds,
-                WaitSeconds: _opt.DefaultWaitSeconds
-            ), CancellationToken.None);
+            if (IsLinkUnavailable(link, token))
+                return null;
+
+            var msgs = await _ops.ReceiveAsync(
+                new ReceiveRequest(
+                    Queue: _queue,
+                    MaxMessages: 1,
+                    VisibilityTimeoutSeconds: _opt.DefaultVisibilityTimeoutSeconds,
+                    WaitSeconds: _opt.DefaultWaitSeconds),
+                token);
+
+            if (IsLinkUnavailable(link, token))
+                return null;
 
             if (msgs.Count == 0)
                 return null;
@@ -46,46 +80,193 @@ internal sealed class QueueEgressSource : IMessageSource
                 ApplicationProperties = new ApplicationProperties()
             };
 
-            // Add helpful metadata (optional)
-            amqpMsg.ApplicationProperties.Map["x-receive-count"] = m.ReceiveCount;
+            amqpMsg.ApplicationProperties.Map[QueuePropertyName] = _queue;
+            amqpMsg.ApplicationProperties.Map[ReceiveCountPropertyName] = m.ReceiveCount;
 
-            var rc = new ReceiveContext(link, amqpMsg)
+            return new ReceiveContext(link, amqpMsg)
             {
-                // store receipt handle for settlement (ack)
                 UserToken = m.ReceiptHandle
             };
-
-            return rc;
         }
-        catch
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            // Don't throw from GetMessageAsync; returning null means "no message right now"
+            _log.LogDebug(
+                "Canceled AMQP egress receive because link closed or detached. Queue={Queue}",
+                _queue);
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(
+                ex,
+                "Failed AMQP egress receive for queue {Queue}. Returning no message.",
+                _queue);
+
             return null;
         }
     }
 
     public void DisposeMessage(ReceiveContext receiveContext, DispositionContext dispositionContext)
     {
+        ArgumentNullException.ThrowIfNull(receiveContext);
+        ArgumentNullException.ThrowIfNull(dispositionContext);
+
+        using var scope = _log.BeginScope("AMQP egress queue {Queue}", _queue);
+
+        var receipt = receiveContext.UserToken as string;
+        var state = dispositionContext.DeliveryState;
+
         try
         {
-            var receipt = receiveContext.UserToken as string;
-
-            // If the client ACCEPTS, we ack in FluxQueue
-            if (!string.IsNullOrWhiteSpace(receipt) &&
-                dispositionContext.DeliveryState is Accepted)
+            if (string.IsNullOrWhiteSpace(receipt))
             {
-                _ops.AckAsync(_queue, receipt, CancellationToken.None)
-                    .GetAwaiter().GetResult();
+                _log.LogWarning(
+                    "Settlement had no receipt handle. DeliveryState={DeliveryState}",
+                    state?.GetType().Name ?? "<null>");
+
+                dispositionContext.Complete();
+                return;
             }
 
-            // Released/Rejected/Modified => do nothing:
-            // message will become visible again after visibility timeout and be redriven by sweeper.
+            switch (state)
+            {
+                case Accepted:
+                    {
+                        var acked = _ops.AckAsync(_queue, receipt, CancellationToken.None)
+                            .GetAwaiter()
+                            .GetResult();
+
+                        if (!acked)
+                        {
+                            _log.LogWarning(
+                                "Accepted settlement did not ack any message. ReceiptHandle={ReceiptHandle}",
+                                receipt);
+                        }
+
+                        break;
+                    }
+
+                case Rejected:
+                    {
+                        var rejected = _ops.RejectAsync(_queue, receipt, CancellationToken.None)
+                            .GetAwaiter()
+                            .GetResult();
+
+                        if (!rejected)
+                        {
+                            _log.LogWarning(
+                                "Rejected settlement did not dead-letter any message. ReceiptHandle={ReceiptHandle}",
+                                receipt);
+                        }
+
+                        break;
+                    }
+
+                case Released:
+                case Modified:
+                    {
+                        _log.LogDebug(
+                            "Settlement left message for visibility-timeout redelivery. ReceiptHandle={ReceiptHandle}, DeliveryState={DeliveryState}",
+                            receipt,
+                            state.GetType().Name);
+
+                        break;
+                    }
+
+                default:
+                    {
+                        _log.LogDebug(
+                            "Unhandled AMQP delivery state treated as no-op. ReceiptHandle={ReceiptHandle}, DeliveryState={DeliveryState}",
+                            receipt,
+                            state?.GetType().Name ?? "<null>");
+
+                        break;
+                    }
+            }
 
             dispositionContext.Complete();
         }
-        catch
+        catch (Exception ex)
         {
+            _log.LogError(
+                ex,
+                "Failed settlement for queue {Queue}. ReceiptHandle={ReceiptHandle}, DeliveryState={DeliveryState}",
+                _queue,
+                receipt ?? "<null>",
+                state?.GetType().Name ?? "<null>");
+
             dispositionContext.Complete();
         }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        foreach (var kvp in _linkCts)
+        {
+            if (_linkCts.TryRemove(kvp.Key, out var cts))
+            {
+                try
+                {
+                    cts.Cancel();
+                }
+                catch
+                {
+                    // ignore cancellation races during teardown
+                }
+                finally
+                {
+                    cts.Dispose();
+                }
+            }
+        }
+    }
+
+    private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
+    private static bool IsLinkUnavailable(ListenerLink link, CancellationToken token)
+    {
+        return token.IsCancellationRequested
+               || link.IsClosed
+               || link.LinkState == LinkState.DetachSent;
+    }
+
+    private CancellationTokenSource GetOrCreateLinkCts(ListenerLink link)
+    {
+        return _linkCts.GetOrAdd(link, CreateLinkCts);
+    }
+
+    private CancellationTokenSource CreateLinkCts(ListenerLink link)
+    {
+        var cts = new CancellationTokenSource();
+
+        link.AddClosedCallback((_, error) =>
+        {
+            if (_linkCts.TryRemove(link, out var removed))
+            {
+                try
+                {
+                    removed.Cancel();
+                }
+                catch
+                {
+                    // ignore cancellation races
+                }
+                finally
+                {
+                    removed.Dispose();
+                }
+            }
+
+            _log.LogDebug(
+                "AMQP link closed for queue {Queue}. Error={Error}",
+                _queue,
+                error?.Description ?? "<none>");
+        });
+
+        return cts;
     }
 }

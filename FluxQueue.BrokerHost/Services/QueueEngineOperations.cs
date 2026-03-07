@@ -61,7 +61,7 @@ public sealed class QueueEngineOperations : IQueueOperations
             ct);
 
         return msgs.Select(m => new TransportMessage(
-            Queue: req.Queue,
+            Queue: normalized.Queue,
             MessageId: m.MessageId,
             Payload: m.Payload,
             ReceiptHandle: m.ReceiptHandle,
@@ -78,6 +78,6 @@ public sealed class QueueEngineOperations : IQueueOperations
     public async Task<bool> RejectAsync(string queue, string receiptHandle, CancellationToken ct)
     {
         _validator.ValidateAck(queue, receiptHandle);
-         return await Task.FromResult(false); // implement later if you add DLQ “reject now”
+        return await _engine.RejectAsync(queue, receiptHandle, ct);
     }
 }

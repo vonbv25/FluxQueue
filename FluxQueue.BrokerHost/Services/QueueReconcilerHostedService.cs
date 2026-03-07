@@ -21,19 +21,32 @@ public sealed class QueueReconcilerHostedService : IHostedService
 
     public async Task StartAsync(CancellationToken ct)
     {
-        if (!_opt.Value.Enabled) return;
+        if (!_opt.Value.Enabled)
+        {
+            _log.LogInformation("FluxQueue reconciliation is disabled.");
+            return;
+        }
 
-        _log.LogWarning("FluxQueue reconciliation starting...");
+        _log.LogWarning(
+            "FluxQueue reconciliation starting. WipeAndRebuildIndexes={WipeAndRebuildIndexes}, MaxMessages={MaxMessages}, SweepBatchSize={SweepBatchSize}",
+            _opt.Value.WipeAndRebuildIndexes,
+            _opt.Value.MaxMessages,
+            _opt.Value.SweepBatchSize);
+
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        await _engine.ReconcileAsync(new ReconcileOptions
-        {
-            WipeAndRebuildIndexes = _opt.Value.WipeAndRebuildIndexes,
-            MaxMessages = _opt.Value.MaxMessages,
-            SweepBatchSize = _opt.Value.SweepBatchSize
-        }, ct);
+        await _engine.ReconcileAsync(
+            new ReconcileOptions
+            {
+                WipeAndRebuildIndexes = _opt.Value.WipeAndRebuildIndexes,
+                MaxMessages = _opt.Value.MaxMessages,
+                SweepBatchSize = _opt.Value.SweepBatchSize
+            },
+            ct);
 
-        _log.LogWarning("FluxQueue reconciliation finished in {ElapsedMs}ms", sw.ElapsedMilliseconds);
+        _log.LogWarning(
+            "FluxQueue reconciliation finished in {ElapsedMs}ms",
+            sw.ElapsedMilliseconds);
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;

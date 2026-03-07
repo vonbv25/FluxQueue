@@ -10,8 +10,8 @@ public sealed class QueueSweeper : BackgroundService
     private readonly QueueSweeperOptions _opt;
     private readonly ILogger<QueueSweeper> _log;
 
-    // Simple per-queue backoff when sweep errors occur (avoid log spam)
     private readonly Dictionary<string, DateTimeOffset> _skipUntil = [];
+    private int _roundRobinCursor = 0;
 
     public QueueSweeper(
         QueueEngine engine,
@@ -25,40 +25,55 @@ public sealed class QueueSweeper : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _log.LogInformation("QueueSweeper started. SweepInterval={SweepInterval} IdleInterval={IdleInterval} MaxToProcessPerQueue={Max}",
-            _opt.BusyDelayMs, _opt.IdleDelayMs, _opt.MaxQueuesPerTick);
+        if (!_opt.Enabled)
+        {
+            _log.LogInformation("QueueSweeper is disabled.");
+            return;
+        }
+
+        _log.LogInformation(
+            "QueueSweeper started. MaxQueuesPerTick={MaxQueuesPerTick}, MaxExpiredMessagesPerQueuePerTick={MaxExpiredPerQueue}, BusyDelayMs={BusyDelayMs}, IdleDelayMs={IdleDelayMs}, ErrorBackoffSeconds={ErrorBackoffSeconds}",
+            _opt.MaxQueuesPerTick,
+            _opt.MaxExpiredMessagesPerQueuePerTick,
+            _opt.BusyDelayMs,
+            _opt.IdleDelayMs,
+            _opt.ErrorBackoffSeconds);
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var queues = _engine.KnownQueues;
+            var queues = _engine.KnownQueues.ToArray();
 
-            if (queues.Count == 0)
+            CleanupSkipEntries(queues);
+
+            if (queues.Length == 0)
             {
                 await Task.Delay(_opt.IdleDelayMs, stoppingToken);
                 continue;
             }
 
             var now = DateTimeOffset.UtcNow;
-            int totalProcessed = 0;
+            var selectedQueues = SelectQueuesForThisTick(queues);
 
-            foreach (var q in queues)
+            int totalProcessed = 0;
+            int visitedQueues = 0;
+
+            foreach (var q in selectedQueues)
             {
                 stoppingToken.ThrowIfCancellationRequested();
 
-                // If a queue has been erroring, skip it briefly
                 if (_skipUntil.TryGetValue(q, out var until) && until > now)
                     continue;
+
+                visitedQueues++;
 
                 try
                 {
                     var processed = await _engine.SweepExpiredAsync(
                         queue: q,
-                        maxToProcess: _opt.MaxQueuesPerTick,
+                        maxToProcess: _opt.MaxExpiredMessagesPerQueuePerTick,
                         ct: stoppingToken);
 
                     totalProcessed += processed;
-
-                    // Success: clear backoff
                     _skipUntil.Remove(q);
                 }
                 catch (OperationCanceledException)
@@ -67,18 +82,55 @@ public sealed class QueueSweeper : BackgroundService
                 }
                 catch (Exception ex)
                 {
-                    // Back off this queue for a bit to avoid tight failure loops
-                    var backoff = TimeSpan.FromSeconds(5);
+                    var backoff = TimeSpan.FromSeconds(_opt.ErrorBackoffSeconds);
                     _skipUntil[q] = now.Add(backoff);
 
-                    _log.LogWarning(ex, "Sweep failed for queue {Queue}. Backing off for {BackoffSeconds}s", q, backoff.TotalSeconds);
+                    _log.LogWarning(
+                        ex,
+                        "Sweep failed for queue {Queue}. Backing off for {BackoffSeconds}s",
+                        q,
+                        backoff.TotalSeconds);
                 }
             }
 
-            // If we did actual work, loop soon (keeps redelivery snappy).
-            // If we did no work, pause (reduces CPU churn).
+            _roundRobinCursor = (_roundRobinCursor + visitedQueues) % Math.Max(queues.Length, 1);
+
             var delay = totalProcessed > 0 ? _opt.BusyDelayMs : _opt.IdleDelayMs;
             await Task.Delay(delay, stoppingToken);
         }
+    }
+
+    private IReadOnlyList<string> SelectQueuesForThisTick(string[] queues)
+    {
+        if (queues.Length <= _opt.MaxQueuesPerTick)
+            return queues;
+
+        var selected = new List<string>(_opt.MaxQueuesPerTick);
+
+        for (int i = 0; i < _opt.MaxQueuesPerTick; i++)
+        {
+            var index = (_roundRobinCursor + i) % queues.Length;
+            selected.Add(queues[index]);
+        }
+
+        return selected;
+    }
+
+    private void CleanupSkipEntries(string[] activeQueues)
+    {
+        if (_skipUntil.Count == 0)
+            return;
+
+        var active = new HashSet<string>(activeQueues, StringComparer.Ordinal);
+        var expired = new List<string>();
+
+        foreach (var kvp in _skipUntil)
+        {
+            if (!active.Contains(kvp.Key) || kvp.Value <= DateTimeOffset.UtcNow)
+                expired.Add(kvp.Key);
+        }
+
+        foreach (var key in expired)
+            _skipUntil.Remove(key);
     }
 }

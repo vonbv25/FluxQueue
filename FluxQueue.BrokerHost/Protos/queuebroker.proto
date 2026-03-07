@@ -8,6 +8,7 @@ service QueueBroker {
   rpc Send (SendGrpcRequest) returns (SendGrpcResponse);
   rpc Receive (ReceiveGrpcRequest) returns (ReceiveGrpcResponse);
   rpc Ack (AckGrpcRequest) returns (AckGrpcResponse);
+  rpc Reject (RejectGrpcRequest) returns (RejectGrpcResponse);
 }
 
 message SendGrpcRequest {
@@ -46,4 +47,14 @@ message AckGrpcRequest {
 
 message AckGrpcResponse {
   bool acknowledged = 1;
+}
+
+message RejectGrpcRequest {
+  string queue = 1;
+  string receiptHandle = 2;
+  string reason = 3;
+}
+
+message RejectGrpcResponse {
+  bool rejected = 1;
 }
