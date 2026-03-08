@@ -578,7 +578,7 @@ Messages are persisted before acknowledgement.
 - authorization
 - TLS transport security
 
-### Distributed Mode
+### Distributed Mode (Future plans)
 
 ```mermaid
 flowchart TD
