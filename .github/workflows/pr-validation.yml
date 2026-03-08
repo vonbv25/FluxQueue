@@ -4,13 +4,9 @@ on:
   push:
     branches:
       - master
-      - release
-      - develop
   pull_request:
     branches:
       - master
-      - release
-      - develop
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -41,6 +37,37 @@ jobs:
               dotnet restore &&
               dotnet build --configuration Release &&
               dotnet test unit-tests/FluxQueue.Core.Test/FluxQueue.Core.Test.csproj \
+                --configuration Release \
+                --no-build \
+                --verbosity normal
+            "
+
+  integration-tests:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    name: Run Integration Tests (master only)
+    needs: unit-tests
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Build test container
+        run: |
+          docker build \
+            --cache-from fluxqueue-test \
+            -f Dockerfile.test \
+            -t fluxqueue-test .
+
+      - name: Run integration tests inside container
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            fluxqueue-test \
+            bash -c "
+              dotnet restore &&
+              dotnet build --configuration Release &&
+              dotnet test integration-tests/FluxQueue.IntegrationTests/FluxQueue.IntegrationTests.csproj \
                 --configuration Release \
                 --no-build \
                 --verbosity normal
