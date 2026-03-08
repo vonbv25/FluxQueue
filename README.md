@@ -4,10 +4,10 @@ FluxQueue is a lightweight message broker built with **.NET** and **RocksDB**.
 
 It provides **durable messaging with minimal operational complexity**, making it suitable for:
 
-- Local infrastructure
-- Edge deployments
-- Internal services
-- Lightweight distributed systems
+- local infrastructure
+- edge deployments
+- internal services
+- lightweight distributed systems
 
 FluxQueue supports multiple transport protocols:
 
@@ -39,11 +39,13 @@ All protocols share the same internal queue engine.
 
 FluxQueue uses **message leases** to prevent message loss.
 
-Message lifecycle:
+Messages move through explicit lifecycle states:
 
-READY → INFLIGHT → ACKED / REJECTED → DLQ
+```text
+READY → INFLIGHT → ACKED / DLQ
+```
 
-If a consumer crashes or fails to acknowledge a message, the lease expires and the message returns to the queue.
+If a consumer crashes or fails to acknowledge a message, the lease expires and the message can be reclaimed and either re-queued or moved to the dead letter queue depending on retry policy.
 
 ### Dead Letter Queue
 
@@ -53,26 +55,119 @@ Messages that repeatedly fail processing can be moved to a **dead letter queue (
 
 FluxQueue includes recovery mechanisms:
 
-- Lease expiration sweeper
-- Reconciliation engine that rebuilds indexes
+- lease expiration sweeper
+- reconciliation engine that rebuilds indexes
 
 ---
 
 ## Architecture Overview
 
-Place the high-level architecture diagram below.
+```mermaid
+flowchart TD
+    C[Clients]
 
-[ARCHITECTURE_DIAGRAM_PLACEHOLDER]
+    subgraph T[Transport Layer]
+        HTTP[HTTP API]
+        GRPC[gRPC Service]
+        AMQP[AMQP 1.0]
+    end
 
-For detailed system architecture see **ARCHITECTURE.md**.
+    subgraph H[Broker Host]
+        HOST[Program / Host]
+        SWEEP[Lease Sweeper]
+        RECON[Reconciliation Worker]
+    end
+
+    subgraph A[Application Layer]
+        OPS[IQueueOperations]
+    end
+
+    subgraph Q[Queue Engine]
+        ENGINE[QueueEngine]
+        ACTORS[Per-Queue Actor Coordination]
+    end
+
+    subgraph S[Persistence Layer]
+        MSG[(msg CF)]
+        READY[(ready CF)]
+        INFLIGHT[(inflight CF)]
+        RECEIPT[(receipt CF)]
+        DLQ[(dlq CF)]
+    end
+
+    C --> HTTP
+    C --> GRPC
+    C --> AMQP
+
+    HTTP --> OPS
+    GRPC --> OPS
+    AMQP --> OPS
+
+    OPS --> ENGINE
+    ENGINE --> ACTORS
+
+    SWEEP --> ENGINE
+    RECON --> ENGINE
+
+    ENGINE --> MSG
+    ENGINE --> READY
+    ENGINE --> INFLIGHT
+    ENGINE --> RECEIPT
+    ENGINE --> DLQ
+```
+
+For deeper design details, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
 ## Message Lifecycle
 
-Insert a state machine diagram here.
+```mermaid
+stateDiagram-v2
+    [*] --> READY : Send
 
-[STATE_MACHINE_DIAGRAM_PLACEHOLDER]
+    READY --> INFLIGHT : Receive
+    INFLIGHT --> ACKED : Ack
+    INFLIGHT --> DLQ : Reject
+    INFLIGHT --> READY : Lease expired and retry allowed
+    INFLIGHT --> DLQ : Lease expired and maxReceiveCount reached
+
+    DLQ --> READY : Replay
+    DLQ --> [*] : Purge
+    ACKED --> [*]
+```
+
+---
+
+## Storage Model
+
+FluxQueue stores data using **RocksDB column families**.
+
+| Column Family | Purpose |
+|---------------|---------|
+| `msg` | message payload storage |
+| `ready` | ready queue index |
+| `inflight` | leased message index |
+| `receipt` | receipt token mapping |
+| `dlq` | dead letter queue |
+
+```mermaid
+flowchart LR
+    SEND[Send] --> MSG[(msg CF)]
+    MSG --> READY[(ready CF)]
+
+    READY -->|Receive| INFLIGHT[(inflight CF)]
+    INFLIGHT -->|Issue receipt| RECEIPT[(receipt CF)]
+
+    INFLIGHT -->|Ack| ACKED[Completed]
+    RECEIPT -->|Used by Ack / Reject| INFLIGHT
+
+    INFLIGHT -->|Reject| DLQ[(dlq CF)]
+    INFLIGHT -->|Lease expired| READY
+    INFLIGHT -->|Max receive count exceeded| DLQ
+
+    DLQ -->|Replay| READY
+```
 
 ---
 
@@ -87,48 +182,56 @@ docker compose up
 Default ports:
 
 | Protocol | Port |
-|--------|------|
+|----------|------|
 | HTTP | 8080 |
 | gRPC | 5001 |
 | AMQP | 5672 |
 
 ---
 
-# Usage Examples
+## Usage Examples
 
-## HTTP Example
+### HTTP Example
 
-### Send Message
-```
+Send a message:
+
+```http
 POST /queues/{queue}/messages
-```
-Example body:
+Content-Type: application/json
 
-```json
 {
   "payloadBase64": "SGVsbG8="
 }
 ```
 
-### Receive Message
-```
+Receive a message:
+
+```http
 POST /queues/{queue}/receive
 ```
-### Acknowledge Message
-```
+
+Acknowledge:
+
+```http
 POST /queues/{queue}/ack
 ```
-### Reject Message
-```
+
+Reject:
+
+```http
 POST /queues/{queue}/reject
 ```
+
 ---
 
-## gRPC Example
+### gRPC Example
 
-Example pseudo client using .NET gRPC.
+Example .NET client:
 
 ```csharp
+using Google.Protobuf;
+using Grpc.Net.Client;
+
 var channel = GrpcChannel.ForAddress("http://localhost:5001");
 var client = new QueueService.QueueServiceClient(channel);
 
@@ -152,9 +255,9 @@ await client.AckAsync(new AckRequest
 
 ---
 
-## AMQP Example
+### AMQP Example
 
-Example using a generic AMQP client.
+Example using a generic Python AMQP 1.0 client:
 
 ```python
 from proton import Message
@@ -170,13 +273,13 @@ class Sender(MessagingHandler):
 Container(Sender()).run()
 ```
 
-AMQP queues map directly to FluxQueue queues.
+AMQP addresses map directly to FluxQueue queues.
 
 ---
 
 ## Project Structure
 
-```
+```text
 FluxQueue
 │
 ├── FluxQueue.BrokerHost
@@ -222,13 +325,13 @@ FluxQueue is currently **in active development (alpha)**.
 
 Implemented capabilities:
 
-- Durable message storage
+- durable message storage
 - HTTP API
 - gRPC support
 - AMQP protocol support
-- Message leasing
-- Dead letter queues
-- Reconciliation and crash recovery
+- message leasing
+- dead letter queues
+- reconciliation and crash recovery
 
 ---
 
@@ -236,26 +339,35 @@ Implemented capabilities:
 
 ### Observability
 
-- Queue metrics
+- queue metrics
 - OpenTelemetry integration
-- Queue inspection APIs
+- queue inspection APIs
 
 ### Reliability
 
-- Crash recovery tests
-- Reconciliation stress testing
-- AMQP edge case validation
+- crash recovery tests
+- reconciliation stress testing
+- AMQP edge-case validation
 
 ### Security
 
 - HTTP authentication
-- Queue authorization
+- queue authorization
 
 ### Production Readiness
 
-- Performance optimizations
-- Operational tooling
-- Stability improvements
+- performance optimizations
+- operational tooling
+- stability improvements
+
+### Future Distributed Mode
+
+Potential future directions include:
+
+- leader-per-queue ownership
+- partitioned queues with consistent hashing
+- replicated write-ahead log
+- cluster metadata and shard routing
 
 ---
 
