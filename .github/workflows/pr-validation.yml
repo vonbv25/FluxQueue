@@ -72,3 +72,76 @@ jobs:
                 --no-build \
                 --verbosity normal
             "
+
+  smoke-test:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    name: Smoke Test Broker (master only)
+    needs:
+      - unit-tests
+      - integration-tests
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Build broker image
+        run: |
+          docker build -t fluxqueue-broker .
+
+      - name: Start FluxQueue broker
+        run: |
+          docker run -d --name fluxqueue \
+            -p 8080:8080 \
+            -p 5001:5001 \
+            -p 5672:5672 \
+            fluxqueue-broker
+
+      - name: Wait for broker health
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8080/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Broker did not become healthy in time."
+          docker logs fluxqueue
+          exit 1
+
+      - name: Send a test message
+        run: |
+          curl -fsS -X POST http://localhost:8080/queues/test-queue/messages \
+            -H "Content-Type: application/json" \
+            -d '{"payloadBase64":"aGVsbG8gd29ybGQ="}'
+
+      - name: Receive a test message
+        run: |
+          response=$(curl -fsS -X POST http://localhost:8080/queues/test-queue/receive)
+          echo "$response"
+          echo "$response" > response.json
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Ack the test message
+        run: |
+          receipt=$(jq -r '.[0].receiptHandle // .receiptHandle' response.json)
+
+          if [ -z "$receipt" ] || [ "$receipt" = "null" ]; then
+            echo "No receiptHandle found in receive response"
+            cat response.json
+            exit 1
+          fi
+
+          curl -fsS -X POST http://localhost:8080/queues/test-queue/ack \
+            -H "Content-Type: application/json" \
+            -d "{\"receiptHandle\":\"$receipt\"}"
+
+      - name: Show broker logs on failure
+        if: failure()
+        run: docker logs fluxqueue
+
+      - name: Stop broker
+        if: always()
+        run: docker rm -f fluxqueue
