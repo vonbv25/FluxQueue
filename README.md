@@ -1,5 +1,8 @@
 # FluxQueue
 
+![CI](https://github.com/vonbv25/FluxQueue/actions/workflows/pr-validation.yml/badge.svg)
+![Release](https://github.com/vonbv25/FluxQueue/actions/workflows/release.yml/badge.svg)
+
 FluxQueue is a lightweight message broker built with **.NET** and **RocksDB**.
 
 It provides **durable messaging with minimal operational complexity**, making it suitable for:
