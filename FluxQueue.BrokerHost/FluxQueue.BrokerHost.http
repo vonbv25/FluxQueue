@@ -1,17 +1,27 @@
-@baseUrl = http://localhost:32772
+@baseUrl = http://localhost:8080
+@apiBase = {{baseUrl}}/api/v1/queues
 @queue = demo
-@messageId = 12314
-@receiptHandle = HsGHooY5DchdOOhgarl_z5x40yJDYOPk
+@receiptHandle = yHEvcCs2i1cM18dQpxkxKXlxWPPwWK6S
 
 ###
-# Health / Root
+# =========================================================
+# FluxQueue HTTP Tester
+# =========================================================
+
+###
+# Root
 GET {{baseUrl}}/
 Accept: text/plain
 
 ###
-# SEND: immediate message
-# Payload is base64. Example below is "hello world"
-POST {{baseUrl}}/queues/{{queue}}/messages
+# =========================================================
+# 1. Send Messages
+# =========================================================
+
+###
+# Send: immediate message
+# "hello world" -> aGVsbG8gd29ybGQ=
+POST {{apiBase}}/{{queue}}/messages
 Content-Type: application/json
 Accept: application/json
 
@@ -22,8 +32,9 @@ Accept: application/json
 }
 
 ###
-# SEND: delayed message (e.g., 5 seconds)
-POST {{baseUrl}}/queues/{{queue}}/messages
+# Send: delayed message
+# "delayed message" -> ZGVsYXllZCBtZXNzYWdl
+POST {{apiBase}}/{{queue}}/messages
 Content-Type: application/json
 Accept: application/json
 
@@ -34,32 +45,8 @@ Accept: application/json
 }
 
 ###
-# RECEIVE: long-poll style receive
-# waitSeconds: how long server may wait for messages
-# visibilityTimeoutSeconds: how long message stays invisible after receive
-POST {{baseUrl}}/queues/{{queue}}/messages:receive
-Content-Type: application/json
-Accept: application/json
-
-{
-  "maxMessages": 5,
-  "visibilityTimeoutSeconds": 30,
-  "waitSeconds": 10
-}
-
-###
-# ACK: replace {{receiptHandle}} with a value returned by RECEIVE
-# NOTE: receiptHandle may contain URL-unsafe characters.
-# If it does, URL-encode it before pasting here.
-DELETE {{baseUrl}}/queues/{{queue}}/receipts/{{receiptHandle}}
-
-###
-# ACK: example of "not found" ack (invalid handle)
-DELETE {{baseUrl}}/queues/{{queue}}/receipts/invalid-handle-123
-
-###
-# SEND: empty payload (will be sent as empty byte[])
-POST {{baseUrl}}/queues/{{queue}}/messages
+# Send: empty payload
+POST {{apiBase}}/{{queue}}/messages
 Content-Type: application/json
 Accept: application/json
 
@@ -70,8 +57,37 @@ Accept: application/json
 }
 
 ###
-# RECEIVE: single message, short visibility
-POST {{baseUrl}}/queues/{{queue}}/messages:receive
+# Send: invalid base64
+POST {{apiBase}}/{{queue}}/messages
+Content-Type: application/json
+Accept: application/json
+
+{
+  "payloadBase64": "%%%not-base64%%%",
+  "delaySeconds": 0,
+  "maxReceiveCount": 5
+}
+
+###
+# =========================================================
+# 2. Receive Messages
+# =========================================================
+
+###
+# Receive: long poll
+POST {{apiBase}}/{{queue}}/messages:receive
+Content-Type: application/json
+Accept: application/json
+
+{
+  "maxMessages": 5,
+  "visibilityTimeoutSeconds": 30,
+  "waitSeconds": 10
+}
+
+###
+# Receive: single message, short visibility timeout
+POST {{apiBase}}/{{queue}}/messages:receive
 Content-Type: application/json
 Accept: application/json
 
@@ -80,3 +96,121 @@ Accept: application/json
   "visibilityTimeoutSeconds": 5,
   "waitSeconds": 0
 }
+
+###
+# Receive: invalid maxMessages
+POST {{apiBase}}/{{queue}}/messages:receive
+Content-Type: application/json
+Accept: application/json
+
+{
+  "maxMessages": 0,
+  "visibilityTimeoutSeconds": 5,
+  "waitSeconds": 0
+}
+
+###
+# =========================================================
+# 3. Ack Flow
+# =========================================================
+
+###
+# Ack: primary route
+# Replace {{receiptHandle}} with a receiptHandle from receive response
+POST {{apiBase}}/{{queue}}/receipts/{{receiptHandle}}:ack
+Accept: application/json
+
+###
+# Ack: invalid receipt handle
+POST {{apiBase}}/{{queue}}/receipts/invalid-handle-123:ack
+Accept: application/json
+
+###
+# Ack: legacy route (still supported)
+DELETE {{apiBase}}/{{queue}}/receipts/{{receiptHandle}}
+
+###
+# =========================================================
+# 4. Reject Flow
+# =========================================================
+
+###
+# Reject: primary route
+# Reject moves the message to the DLQ
+POST {{apiBase}}/{{queue}}/receipts/{{receiptHandle}}:reject
+Accept: application/json
+
+###
+# Reject: invalid receipt handle
+POST {{apiBase}}/{{queue}}/receipts/invalid-handle-123:reject
+Accept: application/json
+
+###
+# =========================================================
+# 5. Suggested Happy Path
+# =========================================================
+
+###
+# Step 1: Send
+POST {{apiBase}}/{{queue}}/messages
+Content-Type: application/json
+Accept: application/json
+
+{
+  "payloadBase64": "aGVsbG8gZmx1eHF1ZXVl",
+  "delaySeconds": 0,
+  "maxReceiveCount": 5
+}
+
+###
+# Step 2: Receive
+# Copy receiptHandle from the response into @receiptHandle above
+POST {{apiBase}}/{{queue}}/messages:receive
+Content-Type: application/json
+Accept: application/json
+
+{
+  "maxMessages": 1,
+  "visibilityTimeoutSeconds": 30,
+  "waitSeconds": 0
+}
+
+###
+# Step 3: Ack
+POST {{apiBase}}/{{queue}}/receipts/{{receiptHandle}}:ack
+Accept: application/json
+
+###
+# =========================================================
+# 6. Suggested Reject / DLQ Flow
+# =========================================================
+
+###
+# Step 1: Send message for rejection test
+POST {{apiBase}}/{{queue}}/messages
+Content-Type: application/json
+Accept: application/json
+
+{
+  "payloadBase64": "cmVqZWN0LW1l",
+  "delaySeconds": 0,
+  "maxReceiveCount": 5
+}
+
+###
+# Step 2: Receive
+# Copy receiptHandle from the response into @receiptHandle above
+POST {{apiBase}}/{{queue}}/messages:receive
+Content-Type: application/json
+Accept: application/json
+
+{
+  "maxMessages": 1,
+  "visibilityTimeoutSeconds": 30,
+  "waitSeconds": 0
+}
+
+###
+# Step 3: Reject
+POST {{apiBase}}/{{queue}}/receipts/{{receiptHandle}}:reject
+Accept: application/json
