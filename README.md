@@ -1,139 +1,84 @@
 # FluxQueue
 
-FluxQueue is a lightweight message broker built with .NET and RocksDB.
+FluxQueue is a lightweight message broker built with **.NET** and **RocksDB**.
 
-It is designed to provide **durable messaging with minimal operational complexity**, making it suitable for local deployments, edge environments, and lightweight infrastructure stacks.
+It provides **durable messaging with minimal operational complexity**, making it suitable for:
 
-FluxQueue supports multiple client protocols including:
+- Local infrastructure
+- Edge deployments
+- Internal services
+- Lightweight distributed systems
+
+FluxQueue supports multiple transport protocols:
 
 - HTTP
 - gRPC
 - AMQP 1.0
 
-The broker focuses on **predictable performance, durability, and operational simplicity**.
+The goal of FluxQueue is to deliver **reliable messaging with simple operations** without requiring complex cluster infrastructure.
 
 ---
 
-# Key Features
+## Features
 
-## Durable Messaging
+### Durable Messaging
 
-Messages are persisted using **RocksDB**, providing fast local storage with crash-safe durability.
+Messages are persisted using **RocksDB**, providing fast embedded storage with crash-safe durability.
 
-## Multiple Protocols
+### Multiple Protocols
 
-FluxQueue supports multiple client interfaces:
+FluxQueue supports:
 
 - HTTP API
 - gRPC
 - AMQP 1.0
 
-All protocols operate through the same internal queue engine.
+All protocols share the same internal queue engine.
 
-## Message Lifecycle Management
+### Lease-Based Message Processing
 
-FluxQueue tracks message state transitions explicitly:
+FluxQueue uses **message leases** to prevent message loss.
 
-```
-READY → INFLIGHT → ACKED / REJECTED / DLQ
-```
+Message lifecycle:
 
-This design enables reliable processing and recovery after crashes.
+READY → INFLIGHT → ACKED / REJECTED → DLQ
 
-## Dead Letter Queues
+If a consumer crashes or fails to acknowledge a message, the lease expires and the message returns to the queue.
 
-Messages that cannot be successfully processed can be routed to a **dead letter queue (DLQ)** for inspection and replay.
+### Dead Letter Queue
 
-## Crash Recovery
+Messages that repeatedly fail processing can be moved to a **dead letter queue (DLQ)**.
 
-FluxQueue includes mechanisms to recover broker state:
+### Crash Recovery
 
-- lease expiration sweeper
-- reconciliation engine that rebuilds indexes from storage
+FluxQueue includes recovery mechanisms:
 
-This ensures queue consistency even after unexpected shutdowns.
+- Lease expiration sweeper
+- Reconciliation engine that rebuilds indexes
 
 ---
 
-# Architecture Overview
+## Architecture Overview
 
-FluxQueue uses a layered architecture.
+Place the high-level architecture diagram below.
 
-```
-Clients
-│
-├── HTTP API
-├── gRPC
-└── AMQP 1.0
-       │
-       ▼
-Broker Host
-       │
-       ▼
-Queue Operations (IQueueOperations)
-       │
-       ▼
-Queue Engine
-       │
-       ▼
-RocksDB Storage
-```
+[ARCHITECTURE_DIAGRAM_PLACEHOLDER]
 
-## Core Components
-
-### BrokerHost
-
-The service host responsible for:
-
-- protocol servers
-- configuration
-- background workers
-- lifecycle management
-
-### QueueEngine
-
-The core broker logic responsible for:
-
-- enqueue / dequeue
-- message leasing
-- acknowledgements
-- dead letter routing
-
-### Storage Layer
-
-FluxQueue uses RocksDB column families:
-
-- `msg`
-- `ready`
-- `inflight`
-- `receipt`
-- `dlq`
-
-These indexes allow efficient queue scanning and state transitions.
+For detailed system architecture see **ARCHITECTURE.md**.
 
 ---
 
-# Message Processing Model
+## Message Lifecycle
 
-Consumers receive messages using a **lease-based delivery model**.
+Insert a state machine diagram here.
 
-1. Consumer receives message  
-2. Message enters `INFLIGHT` state  
-3. Consumer must either:
-
-```
-ACK     → message completed
-REJECT  → message requeued
-TIMEOUT → message returned to READY
-```
-
-This prevents message loss when consumers crash.
+[STATE_MACHINE_DIAGRAM_PLACEHOLDER]
 
 ---
 
-# Running FluxQueue
+## Running FluxQueue
 
-## Using Docker
+### Using Docker
 
 ```bash
 docker compose up
@@ -141,23 +86,23 @@ docker compose up
 
 Default ports:
 
-```
-HTTP   : 8080
-gRPC   : 5001
-AMQP   : 5672
-```
+| Protocol | Port |
+|--------|------|
+| HTTP | 8080 |
+| gRPC | 5001 |
+| AMQP | 5672 |
 
 ---
 
-# Example HTTP Usage
+# Usage Examples
 
-## Send a message
+## HTTP Example
 
+### Send Message
 ```
 POST /queues/{queue}/messages
 ```
-
-Body:
+Example body:
 
 ```json
 {
@@ -165,61 +110,105 @@ Body:
 }
 ```
 
-## Receive a message
-
+### Receive Message
 ```
 POST /queues/{queue}/receive
 ```
-
-## Acknowledge a message
-
+### Acknowledge Message
 ```
 POST /queues/{queue}/ack
 ```
-
-## Reject a message
-
+### Reject Message
 ```
 POST /queues/{queue}/reject
+```
+---
+
+## gRPC Example
+
+Example pseudo client using .NET gRPC.
+
+```csharp
+var channel = GrpcChannel.ForAddress("http://localhost:5001");
+var client = new QueueService.QueueServiceClient(channel);
+
+var sendResponse = await client.SendAsync(new SendRequest
+{
+    Queue = "orders",
+    Payload = ByteString.CopyFromUtf8("hello world")
+});
+
+var receiveResponse = await client.ReceiveAsync(new ReceiveRequest
+{
+    Queue = "orders"
+});
+
+await client.AckAsync(new AckRequest
+{
+    Queue = "orders",
+    Receipt = receiveResponse.Receipt
+});
 ```
 
 ---
 
-# Project Structure
+## AMQP Example
+
+Example using a generic AMQP client.
+
+```python
+from proton import Message
+from proton.handlers import MessagingHandler
+from proton.reactor import Container
+
+class Sender(MessagingHandler):
+    def on_start(self, event):
+        conn = event.container.connect("amqp://localhost:5672")
+        sender = event.container.create_sender(conn, "orders")
+        sender.send(Message(body="hello world"))
+
+Container(Sender()).run()
+```
+
+AMQP queues map directly to FluxQueue queues.
+
+---
+
+## Project Structure
 
 ```
 FluxQueue
 │
 ├── FluxQueue.BrokerHost
-│   Broker service host
+│   Broker host and protocol servers
 │
 ├── FluxQueue.Core
-│   Queue engine and storage logic
+│   Core queue engine and storage logic
 │
 ├── FluxQueue.Transport.Abstractions
-│   Transport interface contracts
+│   Transport interfaces
 │
 ├── FluxQueue.Transport.Amqp
-│   AMQP protocol implementation
+│   AMQP implementation
 │
 ├── integration-tests
 │   End-to-end protocol tests
 │
 └── unit-tests
-    Core engine tests
+    Queue engine unit tests
 ```
 
 ---
 
-# Development
+## Development
 
-## Build
+Build the project:
 
 ```bash
 dotnet build
 ```
 
-## Run broker
+Run the broker:
 
 ```bash
 dotnet run --project FluxQueue.BrokerHost
@@ -227,57 +216,50 @@ dotnet run --project FluxQueue.BrokerHost
 
 ---
 
-# Current Status
+## Status
 
 FluxQueue is currently **in active development (alpha)**.
 
-Implemented capabilities include:
+Implemented capabilities:
 
-- durable message storage
+- Durable message storage
 - HTTP API
+- gRPC support
 - AMQP protocol support
-- message leasing and acknowledgement
-- dead letter queues
-- reconciliation and crash recovery
-
-Current development focus:
-
-- observability
-- operational tooling
-- reliability hardening
+- Message leasing
+- Dead letter queues
+- Reconciliation and crash recovery
 
 ---
 
-# Roadmap
+## Roadmap
 
-## v0.3 — Observability & Operations
+### Observability
 
-- queue metrics
+- Queue metrics
 - OpenTelemetry integration
-- queue statistics API
-- DLQ management APIs
+- Queue inspection APIs
 
-## v0.4 — Reliability Hardening
+### Reliability
 
-- crash recovery tests
-- reconciliation stress testing
+- Crash recovery tests
+- Reconciliation stress testing
 - AMQP edge case validation
 
-## v0.5 — Security
+### Security
 
 - HTTP authentication
-- queue-level authorization
-- secure protocol configuration
+- Queue authorization
 
-## v1.0 — Production Ready
+### Production Readiness
 
-- performance optimizations
-- operational tooling
-- stability improvements
+- Performance optimizations
+- Operational tooling
+- Stability improvements
 
 ---
 
-# Contributing
+## Contributing
 
 Contributions are welcome.
 
@@ -287,23 +269,8 @@ Development work is tracked using:
 - Milestones
 - Project board
 
-If you would like to contribute, please open an issue or pull request.
-
 ---
 
-# Why FluxQueue
-
-FluxQueue aims to provide a messaging system that is:
-
-- simple to deploy
-- predictable in performance
-- easy to operate
-- suitable for local or embedded infrastructure
-
-It is designed as a lightweight alternative to heavier broker systems when full cluster infrastructure is unnecessary.
-
----
-
-# License
+## License
 
 MIT License
