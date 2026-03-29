@@ -1,5 +1,6 @@
-﻿using FluxQueue.BrokerHost.Configuration;
+using FluxQueue.BrokerHost.Configuration;
 using FluxQueue.Core;
+using FluxQueue.Transport.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace FluxQueue.BrokerHost.Services;
@@ -41,6 +42,8 @@ public sealed class QueueSweeper : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            using var activity = FluxQueueTelemetry.ActivitySource.StartActivity("fluxqueue.sweeper.tick");
+
             var queues = _engine.KnownQueues.ToArray();
 
             CleanupSkipEntries(queues);
@@ -94,6 +97,9 @@ public sealed class QueueSweeper : BackgroundService
             }
 
             _roundRobinCursor = (_roundRobinCursor + visitedQueues) % Math.Max(queues.Length, 1);
+            activity?.SetTag("fluxqueue.sweeper.queues.total", queues.Length);
+            activity?.SetTag("fluxqueue.sweeper.queues.visited", visitedQueues);
+            activity?.SetTag("fluxqueue.sweeper.messages.processed", totalProcessed);
 
             var delay = totalProcessed > 0 ? _opt.BusyDelayMs : _opt.IdleDelayMs;
             await Task.Delay(delay, stoppingToken);

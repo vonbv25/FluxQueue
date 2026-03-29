@@ -38,6 +38,10 @@ FluxQueue supports:
 
 All protocols share the same internal queue engine.
 
+### Telemetry
+
+FluxQueue can emit OpenTelemetry traces and metrics for HTTP, gRPC, AMQP, and the shared queue operations layer.
+
 ### Lease-Based Message Processing
 
 FluxQueue uses **message leases** to prevent message loss.
@@ -190,6 +194,18 @@ Default ports:
 | gRPC | 5001 |
 | AMQP | 5672 |
 
+To enable OpenTelemetry export, configure the broker host:
+
+```json
+"OpenTelemetry": {
+  "ServiceName": "FluxQueue.BrokerHost",
+  "Otlp": {
+    "Enabled": true,
+    "Endpoint": "http://otel-collector:4317"
+  }
+}
+```
+
 ---
 
 ## Usage Examples
@@ -320,6 +336,12 @@ Run the broker:
 dotnet run --project FluxQueue.BrokerHost
 ```
 
+Run the broker with the Aspire dashboard:
+
+```bash
+dotnet run --project FluxQueue.AppHost
+```
+
 ---
 
 ## Status
@@ -343,7 +365,7 @@ Implemented capabilities:
 ### Observability
 
 - queue metrics
-- OpenTelemetry integration
+- telemetry dashboards and exporters
 - queue inspection APIs
 
 ### Reliability

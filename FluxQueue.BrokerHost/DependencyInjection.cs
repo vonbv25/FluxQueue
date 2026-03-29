@@ -1,9 +1,6 @@
-﻿using FluxQueue.BrokerHost.Configuration;
-using FluxQueue.BrokerHost.Services;
-using FluxQueue.Core;
-using FluxQueue.Transport.Abstractions;
+using FluxQueue.BrokerHost.Configuration;
+using FluxQueue.BrokerHost.Telemetry;
 using FluxQueue.Transport.Amqp;
-using Microsoft.Extensions.Options;
 
 namespace FluxQueue.BrokerHost;
 
@@ -13,6 +10,7 @@ public static class DependencyInjection
     {
         ArgumentNullException.ThrowIfNull(builder);
 
+        builder.AddFluxQueueTelemetry();
         builder.Services.AddFluxQueue(builder.Configuration);
         builder.Services.AddFluxQueueAmqp(builder.Configuration);
         return builder.Services;

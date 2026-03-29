@@ -3,10 +3,9 @@ using FluxQueue.BrokerHost.Configuration;
 using FluxQueue.BrokerHost.Services;
 using FluxQueue.BrokerHost.Services.Http;
 using FluxQueue.Core;
-using FluxQueue.Transport.Abstractions;
-using FluxQueue.Transport.Amqp;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Options;
+using System.Reflection;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -123,6 +122,7 @@ app.MapGet("/", (IOptions<FluxQueueOptions> options) =>
     return Results.Ok(new
     {
         service = "FluxQueue Broker",
+        version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(),
         protocols = new[] { "HTTP", "gRPC", "AMQP" },
         httpPort = 8080,
         grpcPort = 8081,

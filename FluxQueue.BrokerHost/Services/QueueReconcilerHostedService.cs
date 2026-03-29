@@ -1,8 +1,10 @@
-﻿using FluxQueue.BrokerHost.Configuration;
+using FluxQueue.BrokerHost.Configuration;
 using FluxQueue.Core;
+using FluxQueue.Transport.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace FluxQueue.BrokerHost.Services;
+
 public sealed class QueueReconcilerHostedService : IHostedService
 {
     private readonly QueueEngine _engine;
@@ -27,6 +29,8 @@ public sealed class QueueReconcilerHostedService : IHostedService
             return;
         }
 
+        using var activity = FluxQueueTelemetry.ActivitySource.StartActivity("fluxqueue.reconcile");
+
         _log.LogWarning(
             "FluxQueue reconciliation starting. WipeAndRebuildIndexes={WipeAndRebuildIndexes}, MaxMessages={MaxMessages}, SweepBatchSize={SweepBatchSize}",
             _opt.Value.WipeAndRebuildIndexes,
@@ -43,6 +47,8 @@ public sealed class QueueReconcilerHostedService : IHostedService
                 SweepBatchSize = _opt.Value.SweepBatchSize
             },
             ct);
+
+        activity?.SetTag("fluxqueue.reconcile.elapsed_ms", sw.ElapsedMilliseconds);
 
         _log.LogWarning(
             "FluxQueue reconciliation finished in {ElapsedMs}ms",

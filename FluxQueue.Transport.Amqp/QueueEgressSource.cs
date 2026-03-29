@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Amqp;
@@ -45,6 +46,14 @@ internal sealed class QueueEgressSource : IMessageSource, IDisposable
         ArgumentNullException.ThrowIfNull(link);
 
         using var scope = _log.BeginScope("AMQP egress queue {Queue}", _queue);
+        using var activity = FluxQueueTelemetry.ActivitySource.StartActivity(
+            "fluxqueue.amqp.egress.receive",
+            ActivityKind.Producer);
+
+        activity?.SetTag("messaging.system", "fluxqueue");
+        activity?.SetTag("messaging.protocol", "amqp");
+        activity?.SetTag("messaging.operation", "receive");
+        activity?.SetTag("messaging.destination.name", _queue);
 
         var cts = GetOrCreateLinkCts(link);
         var token = cts.Token;
@@ -69,6 +78,9 @@ internal sealed class QueueEgressSource : IMessageSource, IDisposable
                 return null;
 
             var m = msgs[0];
+            activity?.SetTag("messaging.message.id", m.MessageId);
+            activity?.SetTag("messaging.message.body.size", m.Payload.Length);
+            activity?.SetTag("fluxqueue.receive_count", m.ReceiveCount);
 
             var amqpMsg = new Message
             {
@@ -98,6 +110,9 @@ internal sealed class QueueEgressSource : IMessageSource, IDisposable
         }
         catch (Exception ex)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            FluxQueueTelemetry.RecordException(activity, ex);
+
             _log.LogError(
                 ex,
                 "Failed AMQP egress receive for queue {Queue}. Returning no message.",
@@ -113,6 +128,13 @@ internal sealed class QueueEgressSource : IMessageSource, IDisposable
         ArgumentNullException.ThrowIfNull(dispositionContext);
 
         using var scope = _log.BeginScope("AMQP egress queue {Queue}", _queue);
+        using var activity = FluxQueueTelemetry.ActivitySource.StartActivity(
+            "fluxqueue.amqp.egress.settle",
+            ActivityKind.Consumer);
+
+        activity?.SetTag("messaging.system", "fluxqueue");
+        activity?.SetTag("messaging.protocol", "amqp");
+        activity?.SetTag("messaging.destination.name", _queue);
 
         var receipt = receiveContext.UserToken as string;
         var state = dispositionContext.DeliveryState;
@@ -133,6 +155,8 @@ internal sealed class QueueEgressSource : IMessageSource, IDisposable
             {
                 case Accepted:
                     {
+                        activity?.SetTag("messaging.operation", "ack");
+
                         var acked = _ops.AckAsync(_queue, receipt, CancellationToken.None)
                             .GetAwaiter()
                             .GetResult();
@@ -149,6 +173,8 @@ internal sealed class QueueEgressSource : IMessageSource, IDisposable
 
                 case Rejected:
                     {
+                        activity?.SetTag("messaging.operation", "reject");
+
                         var rejected = _ops.RejectAsync(_queue, receipt, CancellationToken.None)
                             .GetAwaiter()
                             .GetResult();
@@ -166,6 +192,8 @@ internal sealed class QueueEgressSource : IMessageSource, IDisposable
                 case Released:
                 case Modified:
                     {
+                        activity?.SetTag("messaging.operation", "release");
+
                         _log.LogDebug(
                             "Settlement left message for visibility-timeout redelivery. ReceiptHandle={ReceiptHandle}, DeliveryState={DeliveryState}",
                             receipt,
@@ -176,6 +204,8 @@ internal sealed class QueueEgressSource : IMessageSource, IDisposable
 
                 default:
                     {
+                        activity?.SetTag("messaging.operation", "settle");
+
                         _log.LogDebug(
                             "Unhandled AMQP delivery state treated as no-op. ReceiptHandle={ReceiptHandle}, DeliveryState={DeliveryState}",
                             receipt,
@@ -189,6 +219,9 @@ internal sealed class QueueEgressSource : IMessageSource, IDisposable
         }
         catch (Exception ex)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            FluxQueueTelemetry.RecordException(activity, ex);
+
             _log.LogError(
                 ex,
                 "Failed settlement for queue {Queue}. ReceiptHandle={ReceiptHandle}, DeliveryState={DeliveryState}",
@@ -215,7 +248,6 @@ internal sealed class QueueEgressSource : IMessageSource, IDisposable
                 }
                 catch
                 {
-                    // ignore cancellation races during teardown
                 }
                 finally
                 {
@@ -253,7 +285,6 @@ internal sealed class QueueEgressSource : IMessageSource, IDisposable
                 }
                 catch
                 {
-                    // ignore cancellation races
                 }
                 finally
                 {

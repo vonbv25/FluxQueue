@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Diagnostics;
 using System.Threading;
 using Amqp;
 using Amqp.Framing;
@@ -43,12 +44,24 @@ internal sealed class QueueIngressProcessor : IMessageProcessor
         ArgumentNullException.ThrowIfNull(ctx.Message);
 
         using var scope = _log.BeginScope("AMQP ingress queue {Queue}", _queue);
+        using var activity = FluxQueueTelemetry.ActivitySource.StartActivity(
+            "fluxqueue.amqp.ingress",
+            ActivityKind.Consumer);
+
+        activity?.SetTag("messaging.system", "fluxqueue");
+        activity?.SetTag("messaging.protocol", "amqp");
+        activity?.SetTag("messaging.operation", "process");
+        activity?.SetTag("messaging.destination.name", _queue);
 
         try
         {
             var payload = AmqpMessageBody.ExtractPayload(ctx.Message);
             var delaySeconds = ExtractDelaySeconds(ctx.Message);
             var maxReceiveCount = ExtractMaxReceiveCount(ctx.Message, fallback: 5);
+
+            activity?.SetTag("messaging.message.body.size", payload.Length);
+            activity?.SetTag("fluxqueue.delay.seconds", delaySeconds);
+            activity?.SetTag("fluxqueue.max_receive_count", maxReceiveCount);
 
             _ops.SendAsync(
                     new SendRequest(
@@ -71,6 +84,9 @@ internal sealed class QueueIngressProcessor : IMessageProcessor
         }
         catch (ArgumentException ex)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            FluxQueueTelemetry.RecordException(activity, ex);
+
             _log.LogWarning(
                 ex,
                 "Rejected AMQP ingress message for queue {Queue} due to invalid input.",
@@ -84,6 +100,9 @@ internal sealed class QueueIngressProcessor : IMessageProcessor
         }
         catch (Exception ex)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            FluxQueueTelemetry.RecordException(activity, ex);
+
             _log.LogError(
                 ex,
                 "Failed to process AMQP ingress message for queue {Queue}.",
@@ -108,7 +127,7 @@ internal sealed class QueueIngressProcessor : IMessageProcessor
 
         if (TryGetInt64(ap.Map, XDelayPropertyName, out var delayMs) && delayMs > 0)
         {
-            var seconds = (delayMs + 999) / 1000; // round up
+            var seconds = (delayMs + 999) / 1000;
             return (int)Math.Min(int.MaxValue, seconds);
         }
 
