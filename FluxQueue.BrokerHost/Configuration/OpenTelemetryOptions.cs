@@ -7,12 +7,21 @@ public sealed class OpenTelemetryOptions
     public string ServiceName { get; init; } = "FluxQueue.BrokerHost";
     public string? ServiceVersion { get; init; }
     public OtlpOptions Otlp { get; init; } = new();
+    public ConsoleExporterOptions Console { get; set; } = new();
 
     public sealed class OtlpOptions
     {
         public bool Enabled { get; init; }
         public string? Endpoint { get; init; }
         public string? Headers { get; init; }
+    }
+
+    public sealed class ConsoleExporterOptions
+    {
+        public bool Enabled { get; set; }
+        public bool MetricsEnabled { get; set; }
+        public bool TracingEnabled { get; set; }
+        public int MetricsExportIntervalMilliseconds { get; set; } = 5000;
     }
 
     public OpenTelemetryOptions ResolveFromEnvironment(IConfiguration configuration)

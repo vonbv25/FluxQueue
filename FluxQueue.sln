@@ -1,15 +1,13 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.12.35527.113
+# Visual Studio Version 18
+VisualStudioVersion = 18.5.11619.145 insiders
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FluxQueue.Console", "FluxQueue.Console\FluxQueue.Console.csproj", "{424B0F20-48BC-4B3F-9A9E-B7CA287DF2A4}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FluxQueue.Core", "FluxQueue.Core\FluxQueue.Core.csproj", "{47BE75A6-75FC-41B2-9314-EFC66D95220F}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FluxQueue.BrokerHost", "FluxQueue.BrokerHost\FluxQueue.BrokerHost.csproj", "{2021D4B6-6D0F-46BD-8A29-1E2FEDA46428}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FluxQueue.AppHost", "FluxQueue.AppHost\FluxQueue.AppHost.csproj", "{B3E7D3E1-5DA2-4D12-8D57-5D1C2C26F531}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FluxQueue.Transport.Abstractions", "FluxQueue.Transport.Abstractions\FluxQueue.Transport.Abstractions.csproj", "{D8A0E32E-412E-4545-A61A-F69E3E92482B}"
 EndProject
@@ -41,10 +39,6 @@ Global
 		{2021D4B6-6D0F-46BD-8A29-1E2FEDA46428}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2021D4B6-6D0F-46BD-8A29-1E2FEDA46428}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{2021D4B6-6D0F-46BD-8A29-1E2FEDA46428}.Release|Any CPU.Build.0 = Release|Any CPU
-		{B3E7D3E1-5DA2-4D12-8D57-5D1C2C26F531}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{B3E7D3E1-5DA2-4D12-8D57-5D1C2C26F531}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{B3E7D3E1-5DA2-4D12-8D57-5D1C2C26F531}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{B3E7D3E1-5DA2-4D12-8D57-5D1C2C26F531}.Release|Any CPU.Build.0 = Release|Any CPU
 		{D8A0E32E-412E-4545-A61A-F69E3E92482B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{D8A0E32E-412E-4545-A61A-F69E3E92482B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D8A0E32E-412E-4545-A61A-F69E3E92482B}.Release|Any CPU.ActiveCfg = Release|Any CPU

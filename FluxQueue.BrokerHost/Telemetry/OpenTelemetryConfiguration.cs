@@ -48,6 +48,10 @@ public static class OpenTelemetryConfiguration
                     {
                         options.RecordException = true;
                     });
+                if (options.Console.Enabled && options.Console.TracingEnabled)
+                {
+                    tracing.AddConsoleExporter();
+                }
 
                 ConfigureTraceExporters(tracing, options);
             })
@@ -57,6 +61,19 @@ public static class OpenTelemetryConfiguration
                     .AddMeter(FluxQueueTelemetry.MeterName)
                     .AddAspNetCoreInstrumentation()
                     .AddRuntimeInstrumentation();
+
+                if (options.Console.Enabled && options.Console.MetricsEnabled)
+                {
+                    metrics.AddConsoleExporter((_, metricReaderOptions) =>
+                    {
+                        metricReaderOptions.PeriodicExportingMetricReaderOptions.ExportIntervalMilliseconds =
+                            options.Console.MetricsExportIntervalMilliseconds;
+
+                        // Optional:
+                        // metricReaderOptions.PeriodicExportingMetricReaderOptions.ExportTimeoutMilliseconds = 30000;
+                        // metricReaderOptions.TemporalityPreference = MetricReaderTemporalityPreference.Cumulative;
+                    });
+                }
 
                 ConfigureMetricExporters(metrics, options);
             });
